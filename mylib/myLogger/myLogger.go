@@ -11,6 +11,7 @@ type MyLogger struct {
 	loger *log.Logger
 }
 
+var Logger *MyLogger
 func New(logDir string) (*MyLogger, error) {
 
 	err := os.Mkdir(logDir, os.ModePerm)
@@ -26,7 +27,8 @@ func New(logDir string) (*MyLogger, error) {
 	}
 
 	loger := log.New(logFile, "broker", log.Ldate|log.Ltime|log.Lshortfile);
-	return &MyLogger{loger: loger}, err
+	Logger = &MyLogger{loger: loger}
+	return Logger, err
 }
 
 func (l *MyLogger) Printf(format string, v ...interface{}) {

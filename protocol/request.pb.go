@@ -7,10 +7,13 @@ Package protocol is a generated protocol buffer package.
 
 It is generated from these files:
 	request.proto
+	response.proto
 
 It has these top-level messages:
 	Request
 	Message
+	Response
+	Partition
 */
 package protocol
 

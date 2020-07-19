@@ -1,4 +1,4 @@
-package producer
+package consumer
 
 import (
 	"bufio"
@@ -9,19 +9,19 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
-type producerConn struct {
+type consumerConn struct {
 	addr string
-	producer *Producer
+	producer *Consumer
 	Reader *bufio.Reader
 	Writer *bufio.Writer
 }
 
-func newConn(addr string, producer *Producer)  (*producerConn, error){
+func newConn(addr string, producer *Consumer)  (*consumerConn, error){
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	c := &producerConn{
+	c := &consumerConn{
 		addr: addr,
 		Reader: bufio.NewReader(conn),
 		Writer: bufio.NewWriter(conn),
@@ -29,8 +29,8 @@ func newConn(addr string, producer *Producer)  (*producerConn, error){
 	}
 	return c, nil
 }
-func (p *producerConn)readResponse() (*protocol.Response, error){
-	p.producer.logger.Print("readLoop");
+func (p *consumerConn)readResponse() (*protocol.Response, error){
+	p.producer.logger.Print("readResponse");
 	tmp := make([]byte, 4)
 	_, err := io.ReadFull(p.Reader, tmp) //读取长度
 	if err != nil {

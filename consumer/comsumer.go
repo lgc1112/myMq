@@ -1,24 +1,25 @@
-package producer
+package consumer
+
 
 import (
-	"../mylib/myLogger"
-	"../protocol"
+"../mylib/myLogger"
+"../protocol"
 	"encoding/binary"
-	"github.com/golang/protobuf/proto"
-	"log"
+"github.com/golang/protobuf/proto"
+"log"
 )
 
-type Producer struct {
+type Consumer struct {
 	addr   string
-	conn *producerConn
+	conn *consumerConn
 	logger *myLogger.MyLogger
 	partitions []*protocol.Partition
 	sendIdx int
 }
-const logDir string = "./producer/log/"
-func NewProducer(addr string) (*Producer, error) {
+const logDir string = "./consumer/log/"
+func NewConsumer(addr string) (*Consumer, error) {
 	loger, err := myLogger.New(logDir)
-	p := &Producer{
+	p := &Consumer{
 		addr: addr,
 		logger: loger,
 	}
@@ -26,7 +27,7 @@ func NewProducer(addr string) (*Producer, error) {
 	return p, err
 }
 
-func (p *Producer) Connect2Broker() error {
+func (p *Consumer) Connect2Broker() error {
 	var err error
 	p.conn, err = newConn(p.addr, p)
 
@@ -39,7 +40,7 @@ func (p *Producer) Connect2Broker() error {
 	return nil
 }
 
-func (p *Producer) CreatTopic(topic string, num int32){
+func (p *Consumer) CreatTopic(topic string, num int32){
 	requestData := &protocol.Request{
 		Key: protocol.RequestKey_CreatTopic,
 		Topic: topic,
@@ -62,20 +63,47 @@ func (p *Producer) CreatTopic(topic string, num int32){
 		p.partitions = response.Partitions
 	}
 }
+func (p *Consumer) ReadLoop(){
+	for{
+		p.conn.readResponse()
 
-func (p *Producer) getPartition() (*protocol.Partition){
+	}
+}
+func (p *Consumer) GetTopicPartion(topic string){
+	requestData := &protocol.Request{
+		Key: protocol.RequestKey_GetPublisherPartition,
+		Topic: topic,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		log.Fatal("marshaling error: ", err)
+	}
+	var buf [4]byte
+	bufs := buf[:]
+	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+	p.conn.Writer.Write(bufs)
+	p.conn.Writer.Write(data)
+	p.conn.Writer.Flush()
+	p.logger.Printf("GetTopicPartion %s : %s", topic, requestData)
+
+	response, err:= p.conn.readResponse()
+	if err == nil{
+		p.partitions = response.Partitions
+	}
+}
+
+func (p *Consumer) getPartition() (*protocol.Partition){
 	len := len(p.partitions)
 	if len == 0{
 		p.logger.Print("getPartition err")
 		return nil
 	}
-	p.sendIdx++;
 	if p.sendIdx >= len{
 		p.sendIdx %= len
 	}
 	return p.partitions[p.sendIdx]
 }
-func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32){
+func (p *Consumer) Pubilsh(topic string, data []byte, prioroty int32){
 	msg := &protocol.Message{
 		Priority: prioroty,
 		Msg: data,
@@ -99,8 +127,28 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32){
 	p.conn.Writer.Flush()
 	p.logger.Printf("Pubilsh %s", requestData)
 }
+func (p *Consumer) Subscribe(topic string){
+	requestData := &protocol.Request{
+		Key: protocol.RequestKey_Subscribe,
+		Topic: topic,
+		Partition:p.getPartition().Name,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		log.Fatal("marshaling error: ", err)
+	}
+	var buf [4]byte
+	bufs := buf[:]
+	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+	p.conn.Writer.Write(bufs)
+	p.conn.Writer.Write(data)
+	p.conn.Writer.Flush()
+	p.logger.Printf("Pubilsh %s", requestData)
+}
 
-func (p *Producer) GetProducerPartitionForTopic(topic string){
+
+func (p *Consumer) GetProducerPartitionForTopic(topic string){
 
 }
+
 
