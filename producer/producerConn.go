@@ -29,8 +29,8 @@ func newConn(addr string, producer *Producer)  (*producerConn, error){
 	}
 	return c, nil
 }
-func (p *producerConn)readResponse() (*protocol.Response, error){
-	p.producer.logger.Print("readLoop");
+func (p *producerConn)readResponse() (*protocol.Server2Client, error){
+	p.producer.logger.Print("reading");
 	tmp := make([]byte, 4)
 	_, err := io.ReadFull(p.Reader, tmp) //读取长度
 	if err != nil {
@@ -53,13 +53,13 @@ func (p *producerConn)readResponse() (*protocol.Response, error){
 		}
 		return nil, err
 	}
-	response := &protocol.Response{}
+	response := &protocol.Server2Client{}
 	err = proto.Unmarshal(requestData, response)
 	if err != nil {
 		p.producer.logger.Print("Unmarshal error %s", err);
 		return nil, err
 	}
-	p.producer.logger.Printf("receive request Key:%s : %s", response.ResponseType, response);
+	p.producer.logger.Printf("receive request Key:%s : %s", response.Key, response);
 	return response, nil
 
 }

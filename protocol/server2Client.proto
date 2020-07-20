@@ -1,22 +1,25 @@
 syntax = "proto3";
-import "request.proto";
+import "client2Server.proto";
 package protocol;
-enum ResponseType
+enum Server2ClientKey
 {
   Success       = 0;       //成功
   Error        = 1;         //失败
   TopicExisted = 2;
   TopicNotExisted = 3;
+  ChangeConsumerPartition = 4;
+  PushMsg = 5;
 };
 
-message Response {
-  ResponseType ResponseType = 1;
+message Server2Client {
+  Server2ClientKey key = 1;
   Message msg = 3;
   repeated Partition Partitions = 2;
 }
 
 message Partition {
   string name = 1;
-  string addr = 2;
+  string topicName = 2;
+  string addr = 3;
 }
 

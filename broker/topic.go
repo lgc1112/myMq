@@ -4,15 +4,15 @@ import (
 	"strconv"
 	"sync"
 	"../protocol"
+	"sync/atomic"
 )
 
 type topic struct {
-	sync.RWMutex
 	broker *Broker
 	name string
 	partitionMapLock sync.RWMutex
 	partitionMap map[string]*partition
-	maxPartitionNum int
+	maxPartitionNum int64
 }
 
 func newTopic(name string, partitionNum int, broker *Broker) *topic {
@@ -29,8 +29,9 @@ func newTopic(name string, partitionNum int, broker *Broker) *topic {
 		t.partitionMapLock.Lock()
 		t.partitionMap[partitionName] = partition
 		t.partitionMapLock.Unlock()
+		broker.addPartition(&partitionName, partition)
 	}
-	t.maxPartitionNum = partitionNum
+	atomic.StoreInt64(&t.maxPartitionNum, int64(partitionNum))
 
 	return t
 }

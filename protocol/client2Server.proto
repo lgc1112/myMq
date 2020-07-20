@@ -1,0 +1,29 @@
+syntax = "proto3";
+package protocol;
+
+enum Client2ServerKey
+{
+  CreatTopic       = 0;       //普通
+  GetPublisherPartition       = 1;         //聊天场景
+  Publish     = 2;         //好友场景
+  GetConsumerPartition       = 3;        //房间中
+  SubscribePartion = 4;
+  SubscribeTopic = 5;
+  RegisterConsumer = 6;
+  UnRegisterConsumer = 7;
+};
+
+// this is a comment
+message Client2Server {
+  Client2ServerKey key = 1;
+  string Topic = 2;
+  string Partition = 3;
+  string GroupName = 4;
+  int32 PartitionNum = 5;
+  Message msg = 6;
+}
+
+message Message{
+  int32 priority = 1;
+  bytes msg = 2;
+}

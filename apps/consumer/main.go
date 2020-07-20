@@ -1,5 +1,6 @@
 package main
 import (
+	"../../mylib/myLogger"
 	"flag"
 	"fmt"
 )
@@ -8,16 +9,18 @@ func main() {
 	addr := flag.String("addr", "localhost:12345", "ip:port")
 	flag.Parse() //解析参数
 	fmt.Println("Hello, World!")
-	consumer, err := consumer.NewConsumer(*addr)
+	consumer, err := consumer.NewConsumer(*addr, "group0")
 	if err != nil {
-		fmt.Println("err")
+		fmt.Println(err)
 	}
 	err = consumer.Connect2Broker()
 	if err != nil {
-		fmt.Println("err")
+		myLogger.Logger.Print(err)
 	}
-	consumer.GetTopicPartion("fff")
-	consumer.Subscribe("fff")
+	err = consumer.SubscribeTopic("fff")
+	if err != nil {
+		myLogger.Logger.Print(err)
+	}
 	consumer.ReadLoop()
 	exitCh := make(chan error)
 	<-exitCh

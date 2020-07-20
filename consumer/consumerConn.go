@@ -1,12 +1,13 @@
 package consumer
 
 import (
+	"../mylib/myLogger"
+	"../protocol"
 	"bufio"
 	"encoding/binary"
+	"github.com/golang/protobuf/proto"
 	"io"
 	"net"
-	"../protocol"
-	"github.com/golang/protobuf/proto"
 )
 
 type consumerConn struct {
@@ -29,37 +30,37 @@ func newConn(addr string, producer *Consumer)  (*consumerConn, error){
 	}
 	return c, nil
 }
-func (p *consumerConn)readResponse() (*protocol.Response, error){
-	p.producer.logger.Print("readResponse");
+func (p *consumerConn)readSeverData() (*protocol.Server2Client, error){
+	myLogger.Logger.Print("readResponse...")
 	tmp := make([]byte, 4)
 	_, err := io.ReadFull(p.Reader, tmp) //读取长度
 	if err != nil {
 		if err == io.EOF {
-			p.producer.logger.Print("EOF")
+			myLogger.Logger.Print("EOF")
 		} else {
-			p.producer.logger.Print(err)
+			myLogger.Logger.Print(err)
 		}
 		return nil, err
 	}
 	len := int32(binary.BigEndian.Uint32(tmp))
-	p.producer.logger.Printf("readLen %d ", len);
+	myLogger.Logger.Printf("readLen %d ", len)
 	requestData := make([]byte, len)
 	_, err = io.ReadFull(p.Reader, requestData) //读取内容
 	if err != nil {
 		if err == io.EOF {
-			p.producer.logger.Print("EOF")
+			myLogger.Logger.Print("EOF")
 		} else {
-			p.producer.logger.Print(err)
+			myLogger.Logger.Print(err)
 		}
 		return nil, err
 	}
-	response := &protocol.Response{}
+	response := &protocol.Server2Client{}
 	err = proto.Unmarshal(requestData, response)
 	if err != nil {
-		p.producer.logger.Print("Unmarshal error %s", err);
+		myLogger.Logger.Print("Unmarshal error %s", err)
 		return nil, err
 	}
-	p.producer.logger.Printf("receive request Key:%s : %s", response.ResponseType, response);
+	myLogger.Logger.Printf("receive response: %s", response)
 	return response, nil
 
 }

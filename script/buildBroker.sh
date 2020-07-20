@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "Hello World !"
+echo "Build broker!"
 cd ../protocol/
 protoc --go_out=. *.proto
 go build -o ../bin/broker  ../apps/broker/main.go

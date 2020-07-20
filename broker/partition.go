@@ -8,10 +8,9 @@ type partition struct {
 	sync.RWMutex
 	name string
 	addr string
-	groups map[string] *partionGroup
 	msgChan     chan *protocol.Message
 	comsummerClientsLock sync.RWMutex
-	comsummerClients []*client
+	comsummerClients map[string] *client //groupName -> *client
 }
 
 const (
@@ -22,8 +21,8 @@ func newPartition(name, addr string)  *partition{
 	partition := &partition{
 		name : name,
 		addr : addr,
-		groups: make(map[string]*partionGroup),
 		msgChan : make(chan *protocol.Message, msgChanSize),
+		comsummerClients: make(map[string] *client),
 	}
 	go partition.readLoop()
 	return partition
@@ -33,38 +32,60 @@ func (p *partition) readLoop()  {
 	for{
 		select {
 		case msg = <-p.msgChan:
-
 		}
+
 		myLogger.Logger.Printf("Partition %s readMsg %s", p.name, string(msg.Msg))
-		response := &protocol.Response{
-			ResponseType: protocol.ResponseType_TopicNotExisted,
+		response := &protocol.Server2Client{
+			Key: protocol.Server2ClientKey_PushMsg,
 			Msg: msg,
 		}
 		p.comsummerClientsLock.RLock()
-		for _, client := range p.comsummerClients{
+		for grp, client := range p.comsummerClients{
+			if client == nil{
+				myLogger.Logger.Printf("group %s invalid", grp)
+				continue
+			}
+			myLogger.Logger.Printf("send msg to group %s", grp)
 			client.writeChan <- response
 		}
 		p.comsummerClientsLock.RUnlock()
 	}
 }
-func (p *partition) addComsummerClient(client *client) {
+func (p *partition) addComsummerClient(client *client, groupName string) {
+	myLogger.Logger.Printf("partition %s  addComsummerClient : %s", p.name, groupName)
 	p.comsummerClientsLock.Lock()
-	p.comsummerClients = append(p.comsummerClients, client)
+	p.comsummerClients[groupName] = client
+	p.comsummerClientsLock.Unlock()
+}
+
+
+func (p *partition) invalidComsummerClient(client *client, groupName string) {//使得client失效，因为已经被删除
+	p.comsummerClientsLock.Lock()
+	c, ok := p.comsummerClients[groupName]
+	if !ok {
+		myLogger.Logger.Print("invalidComsummerClient not exist : ", groupName)
+	}else{
+		if c.id == client.id{ //id不等的话可能已被替换了
+			p.comsummerClients[groupName] = nil
+			myLogger.Logger.Printf("invalidComsummerClient : %s", groupName)
+		}
+	}
+	p.comsummerClientsLock.Unlock()
+}
+
+func (p *partition) deleteComsummerClient(client *client, groupName string) {
+	p.comsummerClientsLock.Lock()
+	c, ok := p.comsummerClients[groupName]
+	if !ok {
+		myLogger.Logger.Print("deleteComsummerClient not exist : ", groupName)
+	}else{
+		if c.id == client.id{ //id不等的话可能已被替换了
+			delete(p.comsummerClients, groupName)
+			myLogger.Logger.Printf("deleteComsummerClient : %s", groupName)
+		}
+	}
 	p.comsummerClientsLock.Unlock()
 	return
 }
 
-func (p *partition) deleteComsummerClient(client *client) {
-	p.comsummerClientsLock.Lock()
-	j := 0
-	for _, val := range p.comsummerClients {
-		if val != client {
-			p.comsummerClients[j] = val
-			j++
-		}
-	}
-	p.comsummerClients =  p.comsummerClients[:j]
-	p.comsummerClientsLock.Unlock()
-	return
-}
 
