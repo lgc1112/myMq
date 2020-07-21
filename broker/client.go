@@ -15,6 +15,7 @@ const writeChanSize int = 1000
 var Logger *myLogger.MyLogger
 type client struct {
 	id int64
+	conn net.Conn
 	reader *bufio.Reader
 	writerLock sync.RWMutex
 	writer *bufio.Writer
@@ -28,6 +29,7 @@ type client struct {
 func newClient(conn net.Conn, broker *Broker)  *client{
 	c := &client{
 		id : atomic.AddInt64(&broker.maxClientId, 1),
+		conn: conn,
 		reader: bufio.NewReader(conn),
 		writer: bufio.NewWriter(conn),
 		broker: broker,
@@ -39,26 +41,26 @@ func newClient(conn net.Conn, broker *Broker)  *client{
 	return c
 }
 
-func (c *client)clientHandle(conn net.Conn) {
+func (c *client)clientHandle() {
 	var wg sync.WaitGroup
-	wg.Add(2);
+	wg.Add(2)
 	go func() {
-		c.readLoop();
+		c.readLoop()
 		wg.Done()
 	}()
 	go func() {
-		c.writeLoop();
+		c.writeLoop()
 		wg.Done()
 	}()
-	wg.Wait();
-	myLogger.Logger.Print("a client leave");
+	wg.Wait()
+	myLogger.Logger.Print("a client leave")
 	c.clientExit()
-	conn.Close()
 }
 
 func (c *client)clientExit() {
 	myLogger.Logger.Print("exit client :", c.id)
 	c.broker.removeClient(c)
+
 
 	//从group中删除
 	group, ok := c.broker.getGroup(&c.belongGroup)
@@ -83,6 +85,7 @@ func (c *client)clientExit() {
 		}
 	}
 
+	c.conn.Close()
 	close(c.writeChan)
 	close(c.exitChan)
 }
@@ -119,7 +122,7 @@ func (c *client)readLoop() {
 			break
 		}
 		len := int32(binary.BigEndian.Uint32(tmp))
-		myLogger.Logger.Printf("readLen %d ", len);
+		myLogger.Logger.Printf("readLen %d ", len)
 		requestData := make([]byte, len)
 		_, err = io.ReadFull(c.reader, requestData) //读取内容
 		if err != nil {
@@ -134,9 +137,9 @@ func (c *client)readLoop() {
 		request := &protocol.Client2Server{}
 		err = proto.Unmarshal(requestData, request)
 		if err != nil {
-			myLogger.Logger.Print("Unmarshal error %s", err);
+			myLogger.Logger.Print("Unmarshal error %s", err)
 		}else{
-			myLogger.Logger.Printf("receive request: %s", request);
+			myLogger.Logger.Printf("receive request: %s", request)
 		}
 		var response *protocol.Server2Client
 		switch request.Key {

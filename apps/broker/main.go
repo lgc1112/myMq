@@ -8,10 +8,10 @@ import (
 func main() {
 	fmt.Println("Hello, World!")
 
-	b, err:= broker.New();
+	b, err:= broker.New()
 	if err != nil {
-		fmt.Println(err);
+		fmt.Println(err)
 	}
-	b.Main();
+	b.Main()
 	fmt.Println("bye")
 }

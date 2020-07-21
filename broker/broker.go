@@ -40,11 +40,12 @@ func New() (*Broker, error) {
 		groupMap: make(map[string]*group),
 		clientMap: make(map[int64]*client),
 		partitionMap: make(map[string]*partition),
+		addr: *addr,
 	}
 	tcpServer := newTcpServer(broker, *addr)
 	broker.tcpServer = tcpServer
 
-	return broker, err;
+	return broker, err
 
 }
 
@@ -52,8 +53,8 @@ func New() (*Broker, error) {
 func (b *Broker) Main() error {
 	b.wg.Add(1)
 	go func() {
-		b.tcpServer.startTcpServer();
-		b.wg.Done();
+		b.tcpServer.startTcpServer()
+		b.wg.Done()
 	}()
 	b.wg.Wait()
 	return nil
@@ -112,9 +113,11 @@ func (b *Broker) removeClient(client *client) {
 	b.clientLock.Lock()
 	_, ok := b.clientMap[client.id]
 	if !ok {
+		myLogger.Logger.Print("remove broker Client not exist, remain len:", len(b.clientMap))
 		b.clientLock.Unlock()
 		return
 	}
 	delete(b.clientMap, client.id)
+	myLogger.Logger.Print("remove broker Client success, remain len:", len(b.clientMap))
 	b.clientLock.Unlock()
 }

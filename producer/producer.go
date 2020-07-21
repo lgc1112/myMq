@@ -15,6 +15,7 @@ type Producer struct {
 	logger *myLogger.MyLogger
 	partitionMap map[string] []*protocol.Partition
 	sendIdx int
+	connectState int32
 }
 const logDir string = "./producer/log/"
 func NewProducer(addr string) (*Producer, error) {
@@ -35,6 +36,7 @@ func (p *Producer) Connect2Broker() error {
 	if err != nil {
 		//p.conn.Close()
 		p.logger.Printf("(%s) error connecting to broker - %s %s", p.addr, err)
+		//atomic.StoreInt32(p.connectState)
 		return err
 	}
 	p.logger.Printf("connecting to broker - %s", p.addr)
@@ -112,6 +114,15 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 	p.conn.Writer.Write(data)
 	p.conn.Writer.Flush()
 	p.logger.Printf("Pubilsh %s", requestData)
+	response, err:= p.conn.readResponse()
+	if err == nil{
+		if response.Key == protocol.Server2ClientKey_PublishSuccess{
+			p.logger.Print("PublishSuccess")
+		}
+	}else{
+		p.logger.Print("PublishError")
+	}
+
 	return nil
 }
 

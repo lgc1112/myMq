@@ -8,59 +8,119 @@ import (
 	"github.com/golang/protobuf/proto"
 	"io"
 	"net"
+	"sync"
 )
 
 type consumerConn struct {
 	addr string
-	producer *Consumer
-	Reader *bufio.Reader
-	Writer *bufio.Writer
+	consumer *Consumer
+	conn net.Conn
+	reader *bufio.Reader
+	writerLock sync.RWMutex
+	writer *bufio.Writer
+	writeChan     chan *protocol.Client2Server
+	exitChan chan string
 }
 
-func newConn(addr string, producer *Consumer)  (*consumerConn, error){
+func newConn(addr string, consumer *Consumer)  (*consumerConn, error){
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	c := &consumerConn{
 		addr: addr,
-		Reader: bufio.NewReader(conn),
-		Writer: bufio.NewWriter(conn),
-		producer: producer,
+		conn:conn,
+		reader: bufio.NewReader(conn),
+		writer: bufio.NewWriter(conn),
+		writeChan: make(chan *protocol.Client2Server),
+		exitChan: make(chan string),
+		consumer: consumer,
 	}
+
 	return c, nil
 }
-func (p *consumerConn)readSeverData() (*protocol.Server2Client, error){
-	myLogger.Logger.Print("readResponse...")
-	tmp := make([]byte, 4)
-	_, err := io.ReadFull(p.Reader, tmp) //读取长度
-	if err != nil {
-		if err == io.EOF {
-			myLogger.Logger.Print("EOF")
-		} else {
-			myLogger.Logger.Print(err)
+func (c *consumerConn)Handle() {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		c.readLoop()
+		wg.Done()
+	}()
+	go func() {
+		c.writeLoop()
+		wg.Done()
+	}()
+	wg.Wait()
+	myLogger.Logger.Print("connect end")
+	c.exit()
+}
+func (c *consumerConn)exit()  {
+	c.consumer.removeBrokerConn(c)
+	c.conn.Close()
+	close(c.writeChan)
+	close(c.exitChan)
+}
+func (c *consumerConn)readLoop()  {
+	for{
+		myLogger.Logger.Print("readLoop")
+		tmp := make([]byte, 4)
+		_, err := io.ReadFull(c.reader, tmp) //读取长度
+		if err != nil {
+			if err == io.EOF {
+				myLogger.Logger.Print("EOF")
+			} else {
+				myLogger.Logger.Print(err)
+			}
+			c.exitChan <- "bye"
+			break
 		}
-		return nil, err
-	}
-	len := int32(binary.BigEndian.Uint32(tmp))
-	myLogger.Logger.Printf("readLen %d ", len)
-	requestData := make([]byte, len)
-	_, err = io.ReadFull(p.Reader, requestData) //读取内容
-	if err != nil {
-		if err == io.EOF {
-			myLogger.Logger.Print("EOF")
-		} else {
-			myLogger.Logger.Print(err)
+		len := int32(binary.BigEndian.Uint32(tmp))
+		myLogger.Logger.Printf("readLen %d ", len)
+		requestData := make([]byte, len)
+		_, err = io.ReadFull(c.reader, requestData) //读取内容
+		if err != nil {
+			if err == io.EOF {
+				myLogger.Logger.Print("EOF")
+			} else {
+				myLogger.Logger.Print(err)
+			}
+			c.exitChan <- "bye"
+			break
 		}
-		return nil, err
+		server2ClientData := &protocol.Server2Client{}
+		err = proto.Unmarshal(requestData, server2ClientData)
+		if err != nil {
+			myLogger.Logger.Print("Unmarshal error %s", err)
+		}else{
+			myLogger.Logger.Printf("receive data: %s", server2ClientData)
+		}
+		c.consumer.readChan <- &readData{c.addr, server2ClientData}
 	}
-	response := &protocol.Server2Client{}
-	err = proto.Unmarshal(requestData, response)
-	if err != nil {
-		myLogger.Logger.Print("Unmarshal error %s", err)
-		return nil, err
-	}
-	myLogger.Logger.Printf("receive response: %s", response)
-	return response, nil
+}
+func (c *consumerConn)writeLoop()  {
+	var request *protocol.Client2Server
+	for{
+		select {
+		case request = <-c.writeChan:
+			data, err := proto.Marshal(request)
+			if err != nil {
+				myLogger.Logger.Print("marshaling error: ", err)
+				continue
+			}
+			var buf [4]byte
+			bufs := buf[:]
+			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+			c.writerLock.Lock()
+			c.writer.Write(bufs)
+			c.writer.Write(data)
+			c.writer.Flush()
+			c.writerLock.Unlock()
+			myLogger.Logger.Printf("write: %s", request)
+		case <- c.exitChan:
+			goto exit
 
+		}
+	}
+	exit:
+		myLogger.Logger.Printf("writeLoop exit:")
 }

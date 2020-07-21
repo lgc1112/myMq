@@ -3,14 +3,15 @@ package protocol;
 
 enum Client2ServerKey
 {
-  CreatTopic       = 0;       //普通
-  GetPublisherPartition       = 1;         //聊天场景
-  Publish     = 2;         //好友场景
-  GetConsumerPartition       = 3;        //房间中
+  CreatTopic       = 0;
+  GetPublisherPartition       = 1;
+  Publish     = 2;
+  GetConsumerPartition       = 3;
   SubscribePartion = 4;
   SubscribeTopic = 5;
   RegisterConsumer = 6;
   UnRegisterConsumer = 7;
+  ConsumeSuccess = 8;
 };
 
 // this is a comment
@@ -24,6 +25,7 @@ message Client2Server {
 }
 
 message Message{
-  int32 priority = 1;
-  bytes msg = 2;
+  int32 id = 1;
+  int32 priority = 2;
+  bytes msg = 3;
 }

@@ -74,7 +74,7 @@ func (g *group) deleteClient(client *client) (succ bool){
 		}
 	}
 	g.clients =  g.clients[:j]
-	myLogger.Logger.Print("deleteClient success, remain len:", len(g.clients))
+	myLogger.Logger.Print("delete group Client success, group remain len:", len(g.clients))
 	g.clientsLock.Unlock()
 	return true
 }

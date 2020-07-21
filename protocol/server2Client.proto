@@ -9,6 +9,7 @@ enum Server2ClientKey
   TopicNotExisted = 3;
   ChangeConsumerPartition = 4;
   PushMsg = 5;
+  PublishSuccess = 6;
 };
 
 message Server2Client {

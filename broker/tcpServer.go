@@ -19,7 +19,7 @@ func newTcpServer(broker *Broker, addr string) *tcpServer{
 
 func (t *tcpServer)startTcpServer() {
 	listener, err := net.Listen("tcp", t.addr)
-	myLogger.Logger.Print("startTcpServer  " + t.addr);
+	myLogger.Logger.Print("startTcpServer  " + t.addr)
 	if err != nil {
 		myLogger.Logger.Print(err);
 		log.Fatal(err)
@@ -32,6 +32,6 @@ func (t *tcpServer)startTcpServer() {
 		}
 		myLogger.Logger.Print("new client " + conn.RemoteAddr().String());
 		client := newClient(conn, t.broker);
-		go client.clientHandle(conn) // handle one connection at a time
+		go client.clientHandle() // handle one connection at a time
 	}
 }

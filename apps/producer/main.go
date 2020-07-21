@@ -1,4 +1,5 @@
 package main
+
 import (
 	"flag"
 	"fmt"
@@ -23,9 +24,11 @@ func main() {
 		}
 	}
 	pr.CreatTopic("fff", 10)
-	for{
+	for i:= 0; ;i++{
+		s := fmt.Sprintf("hello : %d", i)
+
 		time.Sleep(1*time.Second)
-		pr.Pubilsh("fff", []byte("hahahaha"), 0)
+		pr.Pubilsh("fff", []byte(s), 0)
 	}
 	exitCh := make(chan error)
 	<-exitCh
