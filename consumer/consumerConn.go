@@ -20,7 +20,7 @@ type consumerConn struct {
 	writer *bufio.Writer
 	writeChan     chan *protocol.Client2Server
 	exitChan chan string
-}
+}//
 
 func newConn(addr string, consumer *Consumer)  (*consumerConn, error){
 	conn, err := net.Dial("tcp", addr)
