@@ -23,52 +23,52 @@ func newGroup(name string) *group {
 		client2PartitionMap: make(map[int64] []*protocol.Partition),
 	}
 }
-func (g *group)getClientPartition(client *client)  []*protocol.Partition{
-	g.clientsLock.RLock()
-	if containClient(g.clients, client){
+func (g *group)getClientPartition(clientId int64)  []*protocol.Partition{
+	//g.clientsLock.RLock()
+	if containClient(g.clients, clientId){
 		myLogger.Logger.Print("get Client exist")
 		defer g.clientsLock.RUnlock()
-		return g.client2PartitionMap[client.id]
+		return g.client2PartitionMap[clientId]
 	}
-	g.clientsLock.RUnlock()
+	//g.clientsLock.RUnlock()
 	myLogger.Logger.Print("get Client not exist")
 	return nil
 }
 
 func (g *group)addClient(client *client)  bool{
-	g.clientsLock.RLock()
-	if containClient(g.clients, client){
+	//g.clientsLock.RLock()
+	if containClient(g.clients, client.id){
 		myLogger.Logger.Print("addClient exist")
-		g.clientsLock.RUnlock()
+		//g.clientsLock.RUnlock()
 		return false
 	}
-	g.clientsLock.RUnlock()
-	g.clientsLock.Lock()
+	//g.clientsLock.RUnlock()
+	//g.clientsLock.Lock()
 	g.clients = append(g.clients, client)
 	myLogger.Logger.Print("addClient success, num: ", len(g.clients))
-	g.clientsLock.Unlock()
+	//g.clientsLock.Unlock()
 	return true
 }
-func containClient(items []*client, item *client) bool {
+func containClient(items []*client, item int64) bool {
 	for _, eachItem := range items {
-		if eachItem == item {
+		if eachItem.id == item {
 			return true
 		}
 	}
 	return false
 }
 
-func (g *group) deleteClient(client *client) (succ bool){
-	if !containClient(g.clients, client){
+func (g *group) deleteClient(clientId int64) (succ bool){
+	if !containClient(g.clients, clientId){
 		myLogger.Logger.Print("deleteClient not exist")
 		return false
 	}
 	g.clientsLock.Lock()
 	j := 0
-	for _, val := range g.clients {
-		if val != client {
-			if g.clients[j] != val{
-				g.clients[j] = val
+	for _, client := range g.clients {
+		if client.id != clientId {
+			if g.clients[j].id != client.id{
+				g.clients[j] = client
 			}
 			j++
 		}
@@ -119,13 +119,16 @@ func (g *group)deleteTopic(topic *topic)  {
 
 func (g *group)notifyClients()  {
 	myLogger.Logger.Print("notifyClients ")
+	g.clientsLock.Lock()
 	for _, client := range g.clients{
 		response := &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_ChangeConsumerPartition,
 			Partitions: g.client2PartitionMap[client.id],
 		}
-		client.sendResponse(response)
+		client.writeChan <- response
+		//client.sendResponse(response)
 	}
+	g.clientsLock.Unlock()
 }
 
 func (g *group)rebalance(){
@@ -147,35 +150,3 @@ func (g *group)rebalance(){
 	g.client2PartitionMap = tmpMap
 	g.notifyClients()
 }
-//func
-//func (g *group) getTopic(topicName *string) (*topic, bool) {
-//	g.subscribedTopicMapLock.RLock()
-//	topic, ok := g.subscribedTopicMap[*topicName]
-//	g.subscribedTopicMapLock.RUnlock();
-//	return topic, ok
-//}
-//
-//func (g *group) addTopic(topicName *string, topic *topic) {
-//	g.subscribedTopicMapLock.Lock()
-//	g.subscribedTopicMap[*topicName] = topic
-//	g.subscribedTopicMapLock.Unlock();
-//	return
-//}
-//
-//func (g *group) addClient(client *client) {
-//	g.clientLock.Lock()
-//	g.clientMap[client.id] = client
-//	g.clientLock.Unlock();
-//	return
-//}
-//
-//func (g *group) removeClient(clientID int64) {
-//	g.clientLock.Lock()
-//	_, ok := g.clientMap[clientID]
-//	if !ok {
-//		g.clientLock.Unlock()
-//		return
-//	}
-//	delete(g.clientMap, clientID)
-//	g.clientLock.Unlock()
-//}

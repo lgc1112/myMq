@@ -4,4 +4,9 @@ cd ../protocol/
 protoc --go_out=. *.proto
 go build -o ../bin/broker  ../apps/broker/main.go
 cd ../
-./bin/broker
+if [ $# == 0 ];then
+    ./bin/broker
+else
+    ./bin/broker -addr $1
+fi
+

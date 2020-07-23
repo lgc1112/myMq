@@ -59,7 +59,7 @@ func (c *Consumer) removeBrokerConn(conn *consumerConn) {
 }
 
 func (c *Consumer) Connect2Brokers() error {
-	myLogger.Logger.Printf("Connect2Brokers", c.addrs)
+	myLogger.Logger.Print("Connect2Brokers", c.addrs)
 	for _, addr := range c.addrs {
 		err := c.Connect2Broker(addr)
 		if err != nil {
@@ -148,6 +148,9 @@ func (c *Consumer) processMsg(data *protocol.Server2Client) (*protocol.Client2Se
 	myLogger.Logger.Print("Consumer receive data:", data.Msg.Msg)
 	response := &protocol.Client2Server{
 		Key: protocol.Client2ServerKey_ConsumeSuccess,
+		Partition: data.MsgPartitionName,
+		GroupName: data.MsgGroupName,
+		MsgId: data.Msg.Id,
 	}
 	return response
 }

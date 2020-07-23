@@ -1,7 +1,9 @@
 package broker
+
 import (
 	"../mylib/myLogger"
 	"../protocol"
+	"math"
 	"sync"
 )
 type partition struct {
@@ -9,82 +11,146 @@ type partition struct {
 	name string
 	addr string
 	msgChan     chan *protocol.Message
-	comsummerClientsLock sync.RWMutex
-	comsummerClients map[string] *client //groupName -> *client
+	subscribedGroupsLock sync.RWMutex
+	subscribedGroups map[string] *subscribedGroup //groupName -> *client
+	curMsgId int32
+	msgAskChan     chan *msgAskData
 }
 
 const (
-	msgChanSize = 1000
+	msgChanSize = 0
 )
+
+type msgAskData struct {
+	msgId int32
+	groupName string
+}
 func newPartition(name, addr string)  *partition{
 	myLogger.Logger.Printf("newPartition %s : %s", name, addr)
 	partition := &partition{
 		name : name,
 		addr : addr,
 		msgChan : make(chan *protocol.Message, msgChanSize),
-		comsummerClients: make(map[string] *client),
+		subscribedGroups: make(map[string] *subscribedGroup),
+		msgAskChan: make(chan *msgAskData),
 	}
 	go partition.readLoop()
 	return partition
 }
+
+func (p *partition) generateMsgId() int32{
+	var nextId int32
+	if p.curMsgId == math.MaxInt32{
+		//atomic.StoreInt32(&p.curMsgId, 0)
+		p.curMsgId = 0
+		nextId = 0
+	}else{
+		//nextId = atomic.AddInt32(&p.curMsgId, 1)
+		p.curMsgId++
+		nextId = p.curMsgId
+	}
+	return nextId
+}
+
 func (p *partition) readLoop()  {
 	var msg *protocol.Message
 	for{
 		select {
-		case msg = <-p.msgChan:
-		}
-
-		myLogger.Logger.Printf("Partition %s readMsg %s", p.name, string(msg.Msg))
-		response := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_PushMsg,
-			Msg: msg,
-		}
-		p.comsummerClientsLock.RLock()
-		for grp, client := range p.comsummerClients{
-			if client == nil{
-				myLogger.Logger.Printf("group %s invalid", grp)
-				continue
+		case msgAskData := <- p.msgAskChan:
+			p.subscribedGroupsLock.RLock()
+			subscribedGroup, ok := p.subscribedGroups[msgAskData.groupName]
+			if !ok {
+				myLogger.Logger.Print("msgAskData group not exist :", msgAskData.groupName)
 			}
-			myLogger.Logger.Printf("send msg to group %s", grp)
-			client.writeChan <- response
+			subscribedGroup.msgAskChan <- msgAskData.msgId
+			p.subscribedGroupsLock.RUnlock()
+		case msg = <-p.msgChan:
+			nextId := p.generateMsgId()
+			internalMsg := &protocol.InternalMessage{
+				Id: nextId,
+				Priority: msg.Priority,
+				Msg: msg.Msg,
+			}
+			myLogger.Logger.Printf("Partition %s readMsg %s", p.name, string(msg.Msg))
+			//response := &protocol.Server2Client{
+			//	Key: protocol.Server2ClientKey_PushMsg,
+			//	Msg: msg,
+			//}
+			p.subscribedGroupsLock.RLock()
+			for grpName, subGrp := range p.subscribedGroups{
+				myLogger.Logger.Printf("send msg to subscribedGroups %s", grpName)
+				subGrp.readChan <- internalMsg
+			}
+			p.subscribedGroupsLock.RUnlock()
 		}
-		p.comsummerClientsLock.RUnlock()
 	}
 }
+
 func (p *partition) addComsummerClient(client *client, groupName string) {
 	myLogger.Logger.Printf("partition %s  addComsummerClient : %s", p.name, groupName)
-	p.comsummerClientsLock.Lock()
-	p.comsummerClients[groupName] = client
-	p.comsummerClientsLock.Unlock()
+	p.subscribedGroupsLock.Lock()
+	subscribedGroup, ok:= p.subscribedGroups[groupName]
+
+	if !ok {
+		subscribedGroup = newPartionGroup(groupName, p.name)
+		p.subscribedGroups[groupName] = subscribedGroup
+	}
+
+	waitFinished := make(chan bool)
+
+	subscribedGroup.clientChangeChan <- &clientChange{true, client, waitFinished}//放到partitiongroup的readLoop协程中进行处理，避免频繁使用锁
+	<- waitFinished //等待处理
+	p.subscribedGroupsLock.Unlock()
+
+	myLogger.Logger.Printf("addComsummerClient : %s", groupName)
+
+	//subscribedGroup.consumerClientLock.Lock()
+	//subscribedGroup.consumerClient = client
+	//subscribedGroup.consumerClientLock.Unlock()
 }
 
 
 func (p *partition) invalidComsummerClient(client *client, groupName string) {//使得client失效，因为已经被删除
-	p.comsummerClientsLock.Lock()
-	c, ok := p.comsummerClients[groupName]
+	p.subscribedGroupsLock.Lock()
+	g, ok := p.subscribedGroups[groupName]
 	if !ok {
 		myLogger.Logger.Print("invalidComsummerClient not exist : ", groupName)
 	}else{
-		if c.id == client.id{ //id不等的话可能已被替换了
-			p.comsummerClients[groupName] = nil
-			myLogger.Logger.Printf("invalidComsummerClient : %s", groupName)
-		}
+		waitFinished := make(chan bool)
+		g.clientChangeChan <- &clientChange{false, client, waitFinished}//放到partitiongroup的readLoop协程中进行处理，避免频繁使用锁
+		<- waitFinished //等待处理
+		myLogger.Logger.Printf("invalidComsummerClient : %s", groupName)
+
+		//g.consumerClientLock.Lock()
+		//if g.consumerClient.id == client.id{ //id不等的话可能已被替换了,不用处理
+		//	p.subscribedGroups[groupName].consumerClient = nil
+		//	myLogger.Logger.Printf("invalidComsummerClient : %s", groupName)
+		//}
+		//g.consumerClientLock.Unlock()
 	}
-	p.comsummerClientsLock.Unlock()
+	p.subscribedGroupsLock.Unlock()
 }
 
 func (p *partition) deleteComsummerClient(client *client, groupName string) {
-	p.comsummerClientsLock.Lock()
-	c, ok := p.comsummerClients[groupName]
+	p.subscribedGroupsLock.Lock()
+	g, ok := p.subscribedGroups[groupName]
 	if !ok {
 		myLogger.Logger.Print("deleteComsummerClient not exist : ", groupName)
 	}else{
-		if c.id == client.id{ //id不等的话可能已被替换了
-			delete(p.comsummerClients, groupName)
-			myLogger.Logger.Printf("deleteComsummerClient : %s", groupName)
-		}
+
+		waitFinished := make(chan bool)
+		g.clientChangeChan <- &clientChange{false, client, waitFinished}//放到partitiongroup的readLoop协程中进行处理，避免频繁使用锁
+		<- waitFinished //等待处理
+		myLogger.Logger.Printf("invalidComsummerClient : %s", groupName)
+
+		//g.consumerClientLock.Lock()
+		//if g.consumerClient.id == client.id{ //id不等的话可能已被替换了
+		//	delete(p.subscribedGroups, groupName)
+		//	myLogger.Logger.Printf("deleteComsummerClient : %s", groupName)
+		//}
+		//g.consumerClientLock.Unlock()
 	}
-	p.comsummerClientsLock.Unlock()
+	p.subscribedGroupsLock.Unlock()
 	return
 }
 

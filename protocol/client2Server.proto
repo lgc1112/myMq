@@ -1,4 +1,5 @@
 syntax = "proto3";
+import "message.proto";
 package protocol;
 
 enum Client2ServerKey
@@ -21,11 +22,7 @@ message Client2Server {
   string Partition = 3;
   string GroupName = 4;
   int32 PartitionNum = 5;
-  Message msg = 6;
+  int32 MsgId = 6;
+  Message msg = 7;
 }
 
-message Message{
-  int32 id = 1;
-  int32 priority = 2;
-  bytes msg = 3;
-}

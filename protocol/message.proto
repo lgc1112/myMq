@@ -1,0 +1,18 @@
+syntax = "proto3";
+package protocol;
+
+message Message{
+  int32 id = 1;
+  int32 priority = 2;
+  bytes msg = 3;
+}
+
+message InternalMessage{
+  int32 id = 1;
+  int32 priority = 2;
+  bytes msg = 3;
+
+  int32 pos = 4;
+  int32 tryTimes = 5;
+  int64 timeout = 6;
+}

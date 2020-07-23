@@ -10,19 +10,17 @@ import (
 )
 
 type Producer struct {
-	addr   string
+	Addr   string
 	conn *producerConn
-	logger *myLogger.MyLogger
 	partitionMap map[string] []*protocol.Partition
 	sendIdx int
 	connectState int32
 }
 const logDir string = "./producer/log/"
 func NewProducer(addr string) (*Producer, error) {
-	loger, err := myLogger.New(logDir)
+	_, err := myLogger.New(logDir)
 	p := &Producer{
-		addr: addr,
-		logger: loger,
+		Addr: addr,
 		partitionMap: make(map[string] []*protocol.Partition),
 	}
 
@@ -31,15 +29,15 @@ func NewProducer(addr string) (*Producer, error) {
 
 func (p *Producer) Connect2Broker() error {
 	var err error
-	p.conn, err = newConn(p.addr, p)
+	p.conn, err = newConn(p.Addr, p)
 
 	if err != nil {
 		//p.conn.Close()
-		p.logger.Printf("(%s) error connecting to broker - %s %s", p.addr, err)
+		myLogger.Logger.Printf(" connecting to broker error: %s %s", p.Addr, err)
 		//atomic.StoreInt32(p.connectState)
 		return err
 	}
-	p.logger.Printf("connecting to broker - %s", p.addr)
+	myLogger.Logger.Printf("connecting to broker - %s", p.Addr)
 	return nil
 }
 
@@ -59,7 +57,7 @@ func (p *Producer) CreatTopic(topic string, num int32){
 	p.conn.Writer.Write(bufs)
 	p.conn.Writer.Write(data)
 	p.conn.Writer.Flush()
-	p.logger.Printf("CreatTopic %s : %d", topic, num)
+	myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
 
 	response, err:= p.conn.readResponse()
 	if err == nil{
@@ -70,16 +68,16 @@ func (p *Producer) CreatTopic(topic string, num int32){
 func (p *Producer) getPartition(topic string) (*protocol.Partition){//循环读取
 	partitions, ok := p.partitionMap[topic]
 	if !ok {
-		p.logger.Printf("topic not exist", topic)
+		myLogger.Logger.Printf("topic not exist", topic)
 		err := p.getTopicPartition(topic)
 		if err != nil {
-			p.logger.Print("getPartition error: ", err)
+			myLogger.Logger.Print("getPartition error: ", err)
 			return nil
 		}
 	}
 	len := len(p.partitionMap[topic])
 	if len == 0{
-		p.logger.Print("getPartition err")
+		myLogger.Logger.Print("getPartition err")
 		return nil
 	}
 	p.sendIdx++;
@@ -113,17 +111,17 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 	p.conn.Writer.Write(bufs)
 	p.conn.Writer.Write(data)
 	p.conn.Writer.Flush()
-	p.logger.Printf("Pubilsh %s", requestData)
+	myLogger.Logger.Printf("Pubilsh %s", requestData)
 	response, err:= p.conn.readResponse()
 	if err == nil{
 		if response.Key == protocol.Server2ClientKey_PublishSuccess{
-			p.logger.Print("PublishSuccess")
+			myLogger.Logger.Print("PublishSuccess")
 		}
 	}else{
-		p.logger.Print("PublishError")
+		myLogger.Logger.Print("PublishError")
 	}
 
-	return nil
+	return err
 }
 
 func (p *Producer) getTopicPartition(topic string) error{
@@ -133,7 +131,7 @@ func (p *Producer) getTopicPartition(topic string) error{
 	}
 	data, err := proto.Marshal(requestData)
 	if err != nil {
-		p.logger.Print("marshaling error: ", err)
+		myLogger.Logger.Print("marshaling error: ", err)
 		return err
 	}
 	var buf [4]byte
@@ -142,7 +140,7 @@ func (p *Producer) getTopicPartition(topic string) error{
 	p.conn.Writer.Write(bufs)
 	p.conn.Writer.Write(data)
 	p.conn.Writer.Flush()
-	p.logger.Printf("GetTopicPartion %s : %s", topic, requestData)
+	myLogger.Logger.Printf("GetTopicPartion %s : %s", topic, requestData)
 
 	response, err:= p.conn.readResponse()
 	if err == nil{

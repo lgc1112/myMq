@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 )
-const writeChanSize int = 1000
+const writeChanSize int = 0
 var Logger *myLogger.MyLogger
 type client struct {
 	id int64
@@ -37,7 +37,11 @@ func newClient(conn net.Conn, broker *Broker)  *client{
 		writeChan: make(chan *protocol.Server2Client, writeChanSize),
 		exitChan: make(chan string),
 	}
-	broker.addClient(c)
+	//broker.clientChangeChan <- &clientChange{true, c}
+	waitFinished := make(chan bool)
+	c.broker.clientChangeChan <- &clientChange{true, c, waitFinished}//放到broker 的readLoop协程中进行处理，避免频繁使用锁
+	<- waitFinished //等待添加
+	//broker.addClient(c)
 	return c
 }
 
@@ -59,16 +63,17 @@ func (c *client)clientHandle() {
 
 func (c *client)clientExit() {
 	myLogger.Logger.Print("exit client :", c.id)
-	c.broker.removeClient(c)
-
-
+	waitFinished := make(chan bool)
+	c.broker.clientChangeChan <- &clientChange{false, c, waitFinished}//放到broker 的readLoop协程中进行处理，避免频繁使用锁
+	<- waitFinished //等待移除
+	//c.broker.removeClient(c.id)
 	//从group中删除
 	group, ok := c.broker.getGroup(&c.belongGroup)
 	if !ok {
 		myLogger.Logger.Print("exit client do not belong to any group")
 	}else{
 		myLogger.Logger.Printf("exit client belong to group : %s", c.belongGroup)
-		succ:= group.deleteClient(c) //从group中删除
+		succ:= group.deleteClient(c.id) //从group中删除
 		if succ {
 			group.rebalance()
 		}
@@ -100,7 +105,21 @@ func (c *client) writeLoop() {
 			goto exit
 		case response = <- c.writeChan:
 			myLogger.Logger.Printf("writeResponse %s", response.String())
-			c.sendResponse(response)
+			data, err := proto.Marshal(response)
+			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
+			if err != nil {
+				myLogger.Logger.Print("marshaling error: ", err)
+				continue
+			}
+			var buf [4]byte
+			bufs := buf[:]
+			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+			c.writerLock.Lock()
+			c.writer.Write(bufs)
+			c.writer.Write(data)
+			c.writer.Flush()
+			c.writerLock.Unlock()
+			//c.sendResponse(response)
 		}
 	}
 exit:
@@ -109,7 +128,7 @@ exit:
 }
 func (c *client)readLoop() {
 	for{
-		myLogger.Logger.Print("readLoop");
+		myLogger.Logger.Print("readLoop")
 		tmp := make([]byte, 4)
 		_, err := io.ReadFull(c.reader, tmp) //读取长度
 		if err != nil {
@@ -134,239 +153,59 @@ func (c *client)readLoop() {
 			c.exitChan <- "bye"
 			break
 		}
-		request := &protocol.Client2Server{}
-		err = proto.Unmarshal(requestData, request)
+		client2ServerData := &protocol.Client2Server{}
+		err = proto.Unmarshal(requestData, client2ServerData)
 		if err != nil {
 			myLogger.Logger.Print("Unmarshal error %s", err)
 		}else{
-			myLogger.Logger.Printf("receive request: %s", request)
+			myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
 		}
-		var response *protocol.Server2Client
-		switch request.Key {
-		case protocol.Client2ServerKey_CreatTopic:
-			response = c.creatTopic(request)
-		case protocol.Client2ServerKey_GetPublisherPartition:
-			response = c.getPublisherPartition(request)
-		case protocol.Client2ServerKey_Publish:
-			response = c.publish(request)
-		case protocol.Client2ServerKey_GetConsumerPartition:
-			response = c.getConsumerPartition(request)
-		case protocol.Client2ServerKey_SubscribePartion:
-			response = c.subscribePartition(request)
-		case protocol.Client2ServerKey_SubscribeTopic:
-			response = c.subscribeTopic(request)
-		case protocol.Client2ServerKey_RegisterConsumer:
-			response = c.registerConsumer(request)
-		case protocol.Client2ServerKey_UnRegisterConsumer:
-			response = c.unRegisterConsumer(request)
-		default:
-			myLogger.Logger.Print("cannot find key");
-		}
-		if response != nil{
-			c.sendResponse(response)
-		}
-	}
-}
 
-func (c *client) creatTopic(request *protocol.Client2Server)  (response *protocol.Server2Client) {
-	topicName := request.Topic
-	partionNum := request.PartitionNum
-	topic, ok := c.broker.getTopic(&topicName)
-	if ok {
-		myLogger.Logger.Printf("try to create existed topic : %s %d", topicName, int(partionNum))
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicExisted,
-			Partitions: topic.getPartitions(),
-		}
-	} else {
-		myLogger.Logger.Printf("create topic : %s %d", topicName, int(partionNum))
-		topic = newTopic(topicName, int(partionNum), c.broker)
-		c.broker.addTopic(&topicName, topic)
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
-			Partitions: topic.getPartitions(),
-		}
-	}
-	return response
-}
+		c.broker.readChan <- &readData{c.id, client2ServerData}
 
-func (c *client) getPublisherPartition(request *protocol.Client2Server)   (response *protocol.Server2Client) {
-	topicName := request.Topic
-	topic, ok := c.broker.getTopic(&topicName)
-	if ok {
-		myLogger.Logger.Printf("getPublisherPartition : %s", topicName)
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
-			Partitions: topic.getPartitions(),
-		}
-	} else {
-		myLogger.Logger.Printf("Partition Not existed : %s", topicName)
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicNotExisted,
-		}
-	}
-	return response
-}
-func (c *client) publish(request *protocol.Client2Server)   (response *protocol.Server2Client) {
-	topicName := request.Topic
-	partitionName := request.Partition
-	msg := request.Msg
-	topic, ok := c.broker.getTopic(&topicName)
-	if !ok {
-		myLogger.Logger.Printf("Topic Not existed : %s", topicName)
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicNotExisted,
-		}
-		return response
-	}else{
-		partition, ok := topic.getPartition(&partitionName)
-		if !ok {
-			myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-			response = &protocol.Server2Client{
-				Key: protocol.Server2ClientKey_TopicNotExisted,
-			}
-			return response
-		}else{
-			myLogger.Logger.Printf("publish msg : %s", msg.String())
-			partition.msgChan <- msg
-			response = &protocol.Server2Client{
-				Key: protocol.Server2ClientKey_Success,
-			}
-			return response
-		}
-	}
-
-}
-func (c *client) getConsumerPartition(request *protocol.Client2Server)   (response *protocol.Server2Client) {
-	groupName := request.GroupName
-	group, ok := c.broker.getGroup(&groupName)
-	myLogger.Logger.Printf("registerComsummer : %s", groupName)
-	if !ok {
-		return nil
-		//group = newGroup(groupName)
-		//c.broker.addGroup(group)
-	}
-	partitions := group.getClientPartition(c)
-	if partitions == nil{//不存在
-		return nil
-	}
-	response = &protocol.Server2Client{
-		Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-		Partitions: partitions,
-	}
-	return response
-}
-func (c *client) subscribeTopic(request *protocol.Client2Server)   (response *protocol.Server2Client) {
-	topicName := request.Topic
-	topic, ok := c.broker.getTopic(&topicName)
-	if !ok {
-		myLogger.Logger.Printf("Topic Not existed : %s", topicName)
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Error,
-		}
-		return response
-	}
-
-	groupName := request.GroupName
-	c.belongGroup = groupName
-	group, ok := c.broker.getGroup(&groupName)
-	myLogger.Logger.Printf("registerComsummer : %s", groupName)
-	if !ok {
-		myLogger.Logger.Printf("newGroup : %s", groupName)
-		group = newGroup(groupName)
-		c.broker.addGroup(group)
-	}
-	succ:= group.addTopic(topic)
-	succ = group.addClient(c) || succ
-	if succ{
-		group.rebalance()
-		return nil
-	}else{
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicExisted,
-		}
-		return response
+		//var response *protocol.Server2Client
+		//switch request.Key {
+		//case protocol.Client2ServerKey_CreatTopic:
+		//	response = c.creatTopic(request)
+		//case protocol.Client2ServerKey_GetPublisherPartition:
+		//	response = c.getPublisherPartition(request)
+		//case protocol.Client2ServerKey_Publish:
+		//	response = c.publish(request)
+		//case protocol.Client2ServerKey_GetConsumerPartition:
+		//	response = c.getConsumerPartition(request)
+		//case protocol.Client2ServerKey_SubscribePartion:
+		//	response = c.subscribePartition(request)
+		//case protocol.Client2ServerKey_SubscribeTopic:
+		//	response = c.subscribeTopic(request)
+		//case protocol.Client2ServerKey_RegisterConsumer:
+		//	response = c.registerConsumer(request)
+		//case protocol.Client2ServerKey_UnRegisterConsumer:
+		//	response = c.unRegisterConsumer(request)
+		//default:
+		//	myLogger.Logger.Print("cannot find key");
+		//}
+		//if response != nil{
+		//	c.sendResponse(response)
+		//}
 	}
 }
 
 
-func (c *client) subscribePartition(request *protocol.Client2Server)   (response *protocol.Server2Client) {
-	topicName := request.Topic
-	partitionName := request.Partition
-	groupName := request.GroupName
-	topic, ok := c.broker.getTopic(&topicName)
-	if !ok {
-		myLogger.Logger.Printf("Topic Not existed : %s", topicName)
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicNotExisted,
-		}
-		return response
-	}else{
-		partition, ok := topic.getPartition(&partitionName)
-		if !ok {
-			myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-			response = &protocol.Server2Client{
-				Key: protocol.Server2ClientKey_Error,
-			}
-			return response
-		}else{
-			c.consumePartions[partitionName] = true
-			partition.addComsummerClient(c, groupName)
-			response = &protocol.Server2Client{
-				Key: protocol.Server2ClientKey_Success,
-			}
-			return response
-		}
-	}
-}
-
-func (c *client) registerConsumer(request *protocol.Client2Server)   (response *protocol.Server2Client) {
-	groupName := request.GroupName
-	group, ok := c.broker.getGroup(&groupName)
-	myLogger.Logger.Printf("registerComsummer : %s", groupName)
-	if !ok {
-		group = newGroup(groupName)
-		c.broker.addGroup(group)
-	}
-	succ := group.addClient(c)
-	if succ{//已通过go balance response
-		return nil
-	}
-	response = &protocol.Server2Client{
-		Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-		Partitions: group.getClientPartition(c),
-	}
-	return response
-}
-
-func (c *client) unRegisterConsumer(request *protocol.Client2Server)   (response *protocol.Server2Client) {
-	groupName := request.GroupName
-	group, ok := c.broker.getGroup(&groupName)
-	myLogger.Logger.Printf("registerComsummer : %s", groupName)
-	if !ok {
-		myLogger.Logger.Printf("group not exist : %s", groupName)
-		return nil
-	}
-	group.deleteClient(c)
-	return nil
-}
-
-
-
-func (c *client) sendResponse(response *protocol.Server2Client)  error{
-	data, err := proto.Marshal(response)
-	myLogger.Logger.Print("send sendResponse len:", len(data), response)
-	if err != nil {
-		myLogger.Logger.Print("marshaling error: ", err)
-		return err
-	}
-	var buf [4]byte
-	bufs := buf[:]
-	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	c.writerLock.Lock()
-	c.writer.Write(bufs)
-	c.writer.Write(data)
-	c.writer.Flush()
-	c.writerLock.Unlock()
-	return nil
-}
+//
+//func (c *client) sendResponse2(response *protocol.Server2Client)  error{
+//	data, err := proto.Marshal(response)
+//	myLogger.Logger.Print("send sendResponse len:", len(data), response)
+//	if err != nil {
+//		myLogger.Logger.Print("marshaling error: ", err)
+//		return err
+//	}
+//	var buf [4]byte
+//	bufs := buf[:]
+//	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+//	c.writerLock.Lock()
+//	c.writer.Write(bufs)
+//	c.writer.Write(data)
+//	c.writer.Flush()
+//	c.writerLock.Unlock()
+//	return nil
+//}
