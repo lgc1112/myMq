@@ -26,12 +26,13 @@ func main() {
 		//myLogger.Logger.Printf("connecting to broker error - %s", pr.Addr)
 		os.Exit(1)
 	}
-	pr.CreatTopic("fff", 10)
-	for i:= 0;;i++{
+	pr.CreatTopic("fff", 1)
+	var i int32
+	for ;;i++{
 		s := fmt.Sprintf("hello : %d", i)
 
 		time.Sleep(1*time.Second)
-		pr.Pubilsh("fff", []byte(s), 0)
+		pr.Pubilsh("fff", []byte(s), i)
 	}
 	//exitCh := make(chan error)
 	//<-exitCh

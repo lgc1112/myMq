@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 )
-const writeChanSize int = 0
+const defaultreadyNum = 1000
 var Logger *myLogger.MyLogger
 type client struct {
 	id int64
@@ -22,8 +22,11 @@ type client struct {
 	broker *Broker
 	belongGroup string
 	consumePartions map[string] bool
-	writeChan     chan *protocol.Server2Client
+	writeCmdChan     chan *protocol.Server2Client
+	writeMsgChan     chan *protocol.Server2Client
 	exitChan chan string
+	readyNum int32 //客户端目前可接受的数据量
+	changeReadyNum chan int32 //使得readyNum只在writeLoop协程中修改
 }
 
 func newClient(conn net.Conn, broker *Broker)  *client{
@@ -34,8 +37,11 @@ func newClient(conn net.Conn, broker *Broker)  *client{
 		writer: bufio.NewWriter(conn),
 		broker: broker,
 		consumePartions: make(map[string] bool),
-		writeChan: make(chan *protocol.Server2Client, writeChanSize),
+		writeCmdChan: make(chan *protocol.Server2Client),
+		writeMsgChan: make(chan *protocol.Server2Client),
 		exitChan: make(chan string),
+		changeReadyNum: make(chan int32),
+		readyNum: defaultreadyNum, //客户端默认可接收数据为1000
 	}
 	//broker.clientChangeChan <- &clientChange{true, c}
 	waitFinished := make(chan bool)
@@ -91,24 +97,63 @@ func (c *client)clientExit() {
 	}
 
 	c.conn.Close()
-	close(c.writeChan)
+	close(c.writeMsgChan)
+	close(c.writeCmdChan)
+	close(c.changeReadyNum)
 	close(c.exitChan)
 }
 
 
 func (c *client) writeLoop() {
-	var response *protocol.Server2Client
+	var server2ClientData *protocol.Server2Client
+	writeMsgChan := c.writeMsgChan
 	for{
 		select {
 		case s := <- c.exitChan:
 			myLogger.Logger.Print(s)
 			goto exit
-		case response = <- c.writeChan:
-			myLogger.Logger.Printf("writeResponse %s", response.String())
-			data, err := proto.Marshal(response)
+		case num := <- c.changeReadyNum:
+			if num == -1{
+				c.readyNum++
+				myLogger.Logger.Print("add readyNum: ", c.readyNum)
+			}else{
+				c.readyNum = num
+				myLogger.Logger.Print("change readyNum: ", c.readyNum)
+			}
+			if c.readyNum <= 0{
+				writeMsgChan =  nil//不可以往客户端写
+			}else{
+				writeMsgChan =  c.writeMsgChan//可以开始往客户端写
+			}
+		case server2ClientData = <- writeMsgChan://如果向客户端发送了一条消息，则客户端目前可接受的数据量readyCount应该减一
+			c.readyNum--
+			if c.readyNum <= 0{
+				myLogger.Logger.Print("client not ready")
+				writeMsgChan = nil //不能再发消息了，除非client重现提交readycount
+			}
+			myLogger.Logger.Printf("writeMsgChan %s", server2ClientData.String())
+			data, err := proto.Marshal(server2ClientData)
 			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
 			if err != nil {
-				myLogger.Logger.Print("marshaling error: ", err)
+				myLogger.Logger.PrintError("marshaling error: ", err)
+				continue
+			}
+			var buf [4]byte
+			bufs := buf[:]
+			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+			c.writerLock.Lock()
+			c.writer.Write(bufs)
+			c.writer.Write(data)
+			c.writer.Flush()
+			c.writerLock.Unlock()
+			//c.sendResponse(response)
+
+		case server2ClientData = <- c.writeCmdChan:
+			myLogger.Logger.Printf("writeResponse %s", server2ClientData.String())
+			data, err := proto.Marshal(server2ClientData)
+			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
+			if err != nil {
+				myLogger.Logger.PrintError("marshaling error: ", err)
 				continue
 			}
 			var buf [4]byte
@@ -160,7 +205,13 @@ func (c *client)readLoop() {
 		}else{
 			myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
 		}
-
+		if client2ServerData.Key == protocol.Client2ServerKey_CommitReadyNum{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
+			c.changeReadyNum <- client2ServerData.ReadyNum //修改readyCount
+			continue
+		}
+		if client2ServerData.Key == protocol.Client2ServerKey_ConsumeSuccess{//如果向客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
+			c.changeReadyNum <- -1 //修改readyCount++
+		}
 		c.broker.readChan <- &readData{c.id, client2ServerData}
 
 		//var response *protocol.Server2Client

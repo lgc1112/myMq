@@ -6,6 +6,7 @@ import (
 	"container/heap"
 	"container/list"
 	"errors"
+	"github.com/golang/protobuf/proto"
 	"time"
 )
 
@@ -25,6 +26,7 @@ type subscribedGroup struct {
 
 	clientChangeChan     chan *clientChange
 	msgAskChan     chan int32
+	diskQueue *diskQueue
 }
 
 
@@ -39,7 +41,9 @@ func newPartionGroup(name, partitionName string) *subscribedGroup  {
 		inflightQueue: list.New(),
 		partitionName: partitionName,
 		name: name,
+		diskQueue: NewDiskQueue("./data/" + partitionName + "/" + name + "/"),
 	}
+	
 	go g.readLoop()
 	go g.writeLoop()
 	return g
@@ -83,7 +87,7 @@ func (g *subscribedGroup) writeLoop()  {
 		case tmp := <- g.clientChangeChan:
 			if tmp.isAdd{//添加或修改client
 				g.consumerClient = tmp.client
-				consumerChan = g.consumerClient.writeChan //可以往这边消费者写数据了
+				consumerChan = g.consumerClient.writeMsgChan //可以往这边消费者写数据了
 				if pushMsg == nil{//还没有消息，开始读
 					preparedMsgChan = g.preparedMsgChan
 					curConsumerChan = nil
@@ -165,33 +169,74 @@ func (g *subscribedGroup) writeLoop()  {
 
 func (g *subscribedGroup) readLoop()  {
 	var msg *protocol.InternalMessage
-	var preparedMsgChan chan *protocol.InternalMessage
-	var readyData *protocol.InternalMessage
+	var memPreparedMsgChan chan *protocol.InternalMessage
+	var diskPreparedMsgChan chan *protocol.InternalMessage
+	var diskReadyChan chan []byte
+	var memReadyData *protocol.InternalMessage
+	var diskReadyData *protocol.InternalMessage
 	//var haveProcessPreparedData bool = true
 	for{
-		if readyData == nil && g.priorityQueue.Len() > 0{
+		if memReadyData == nil && g.priorityQueue.Len() > 0{
 			myLogger.Logger.Print("read Data from priorityQueue")
-			readyData = heap.Pop(g.priorityQueue).(*protocol.InternalMessage)
+			memReadyData = heap.Pop(g.priorityQueue).(*protocol.InternalMessage)
 		}
-		if readyData == nil{
-			preparedMsgChan = nil //无数据可发，设为nil使其阻塞
+		if memReadyData == nil{
+			memPreparedMsgChan = nil //内存无数据可发，设为nil使其阻塞
 		}else{
-			preparedMsgChan = g.preparedMsgChan //有数据，管道准备好时应该发送
+			memPreparedMsgChan = g.preparedMsgChan //内存有数据，管道准备好时应该发送
 		}
+
+		if diskReadyData == nil{ //准备好的数据为空
+			diskPreparedMsgChan = nil //磁盘无数据可发，设为nil使其阻塞
+			diskReadyChan = g.diskQueue.readyChan //可从磁盘读数据
+		}else{
+			diskPreparedMsgChan = g.preparedMsgChan //磁盘有数据可发，管道准备好时应该发送
+			diskReadyChan = nil //读出的数据为处理，不可从磁盘读数据
+		}
+
 		select {
-		case preparedMsgChan <- readyData:
-			if readyData == nil {
-				myLogger.Logger.Print("error, should not come here")
+		case bytes := <- diskReadyChan: //有磁盘数据可读
+			if diskReadyData != nil {
+				myLogger.Logger.PrintError("Should not come here")
 			}
-			readyData = nil
+			diskReadyData = &protocol.InternalMessage{}
+			err := proto.Unmarshal(bytes, diskReadyData)
+			if err != nil{
+				myLogger.Logger.PrintError("Unmarshal :", err)
+			}
+		case diskPreparedMsgChan <- diskReadyData:
+			if diskReadyData == nil {
+				myLogger.Logger.PrintError("Should not come here")
+			}
+			diskReadyData = nil
+
+		case memPreparedMsgChan <- memReadyData:
+			if memReadyData == nil {
+				myLogger.Logger.PrintError("Should not come here")
+			}
+			memReadyData = nil
 		case msg = <-g.readChan:
-			if g.priorityQueue.Len() < queueSize{//存内存
-				msg.TryTimes++ //重试次数加一
-				heap.Push(g.priorityQueue, msg)
-				myLogger.Logger.Printf("push Msg %s to priorityQueue, present Len: %d", msg, g.priorityQueue.Len())
-			}else{//存磁盘
+			select {
+			case g.preparedMsgChan <- msg: //如果可以直接处理这个数据，则不用存优先队列，直接处理
+			default:
+				if g.priorityQueue.Len() < queueSize{//存内存
+					msg.TryTimes++ //重试次数加一
+					heap.Push(g.priorityQueue, msg)
+					myLogger.Logger.Printf("push Msg %s to priorityQueue, present Len: %d", msg, g.priorityQueue.Len())
+				}else{//存磁盘
+					data, err := proto.Marshal(msg)
+					if err != nil{
+						myLogger.Logger.PrintError("Marshal :", err)
+					}
+					err = g.diskQueue.storeData(data)
+					if err != nil{
+						myLogger.Logger.PrintError("storeData :", err)
+					}
+					myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", msg, g.diskQueue.msgNum)
+				}
 
 			}
+
 		}
 
 	}

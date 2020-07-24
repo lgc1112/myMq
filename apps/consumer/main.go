@@ -33,6 +33,7 @@ func main() {
 		myLogger.Logger.Print(err)
 		os.Exit(1)
 	}
+	//consumer.CommitReadyNum(10)
 	consumer.ReadLoop()
 	exitCh := make(chan error)
 	<-exitCh

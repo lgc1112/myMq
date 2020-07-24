@@ -92,28 +92,18 @@ func (c *Consumer) SubscribeTopic(topicName string) error {
 		Topic: topicName,
 		GroupName: c.groupName,
 	}
-	//data, err := proto.Marshal(requestData)
-	//if err != nil {
-	//	myLogger.Logger.Print("marshaling error: ", err)
-	//}
-	//var buf [4]byte
-	//bufs := buf[:]
-	//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	//c.conn.writer.Write(bufs)
-	//c.conn.writer.Write(data)
-	//c.conn.writer.Flush()
 	c.conn.writeChan <- requestData
 	myLogger.Logger.Printf("subscribeTopic %s : %s", topicName, requestData)
+	return nil
+}
 
-	//response, err:= c.conn.readSeverData()
-	//
-	//if err == nil{
-	//	myLogger.Logger.Printf("subscribeTopic response %s", response)
-	//	c.partitions = response.Partitions
-	//	c.subscribePartion()
-	//}else{
-	//	myLogger.Logger.Printf("subscribeTopic err", err)
-	//}
+func (c *Consumer) CommitReadyNum(num int32) error {
+	requestData := &protocol.Client2Server{
+		Key: protocol.Client2ServerKey_CommitReadyNum,
+		ReadyNum: num,
+	}
+	c.conn.writeChan <- requestData
+	myLogger.Logger.Print("commitReadyNum", requestData)
 	return nil
 }
 

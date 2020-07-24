@@ -125,7 +125,7 @@ func (g *group)notifyClients()  {
 			Key: protocol.Server2ClientKey_ChangeConsumerPartition,
 			Partitions: g.client2PartitionMap[client.id],
 		}
-		client.writeChan <- response
+		client.writeCmdChan <- response
 		//client.sendResponse(response)
 	}
 	g.clientsLock.Unlock()

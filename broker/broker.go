@@ -47,11 +47,11 @@ type readData struct {
 const logDir string = "./broker/log/"
 func New() (*Broker, error) {
 	addr := flag.String("addr", "0.0.0.0:12345", "ip:port")
+	flag.Parse() //解析参数
 
 	if *addr == "0.0.0.0:12345" {
 		*addr = getIntranetIp() + ":12345"
 	}
-	flag.Parse() //解析参数
 
 	_, err:= myLogger.New(logDir)
 
@@ -224,7 +224,7 @@ func (b *Broker) ReadLoop() {
 			myLogger.Logger.Print("cannot find key")
 		}
 		if response != nil{
-			clientConn.writeChan <- response
+			clientConn.writeCmdChan <- response
 		}
 		
 		
@@ -294,10 +294,10 @@ func (b *Broker)  consumeSuccess(data *readData)   (response *protocol.Server2Cl
 			groupName: request.GroupName,
 		}
 		partition.msgAskChan <- msgAskData
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
-		}
-		return response
+		//response = &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_Success,
+		//}
+		return nil
 	}
 }
 

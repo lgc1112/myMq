@@ -13,6 +13,7 @@ enum Client2ServerKey
   RegisterConsumer = 6;
   UnRegisterConsumer = 7;
   ConsumeSuccess = 8;
+  CommitReadyNum = 9;
 };
 
 // this is a comment
@@ -23,6 +24,7 @@ message Client2Server {
   string GroupName = 4;
   int32 PartitionNum = 5;
   int32 MsgId = 6;
-  Message msg = 7;
+  int32 ReadyNum = 7;
+  Message msg = 8;
 }
 
