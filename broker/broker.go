@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"sync"
 )
 
@@ -32,6 +33,11 @@ type Broker struct {
 
 	readChan     chan *readData
 	clientChangeChan     chan *clientChange
+
+	exitSignal chan os.Signal
+	//exitChan chan string
+
+	needExit bool
 }
 type clientChange struct {
 	isAdd bool
@@ -49,6 +55,7 @@ func New() (*Broker, error) {
 	addr := flag.String("addr", "0.0.0.0:12345", "ip:port")
 	flag.Parse() //解析参数
 
+
 	if *addr == "0.0.0.0:12345" {
 		*addr = getIntranetIp() + ":12345"
 	}
@@ -63,7 +70,12 @@ func New() (*Broker, error) {
 		readChan: make(chan *readData),
 		clientChangeChan: make(chan *clientChange),
 		addr: *addr,
+		exitSignal: make(chan os.Signal),
+		//exitChan: make(chan string, 2),
 	}
+
+
+
 	tcpServer := newTcpServer(broker, *addr)
 	broker.tcpServer = tcpServer
 
@@ -88,18 +100,22 @@ func getIntranetIp() string{
 	}
 	return "0.0.0.0"
 }
-func (b *Broker) Main() error {
+func (b *Broker) Run() error {
 	b.wg.Add(2)
 	go func() {
 		b.ReadLoop()
 		b.wg.Done()
 	}()
-
 	go func() {
 		b.tcpServer.startTcpServer()
 		b.wg.Done()
 	}()
-	b.wg.Wait()
+	//监听指定退出信号 ctrl+c kill
+	signal.Notify(b.exitSignal, os.Interrupt, os.Kill)
+
+	b.wg.Wait() //等待上面的两个协程关闭
+
+	myLogger.Logger.Print("Broker Run exit ")
 	return nil
 }
 
@@ -174,16 +190,46 @@ func (b *Broker) removeClient(clientId int64) {
 	//b.clientMapLock.Unlock()
 }
 
+func (b *Broker) exit()  {
+	if b.tcpServer.listener != nil {
+		b.tcpServer.listener.Close()//关闭tcp监听
+	}
+
+	for _, client := range b.clientMap {
+		client.conn.Close() //关闭所有conn，从而关闭所有client协程
+	}
+
+
+}
 func (b *Broker) ReadLoop() {
 	var data *readData
 	for{
 		myLogger.Logger.Print("Broker readLoop")
 		select {
-		case tmp := <- b.clientChangeChan:
+		case s := <- b.exitSignal: //退出信号来了
+			myLogger.Logger.Print("exitSignal:", s)
+			b.needExit = true
+			b.exit()
+			if b.needExit && len(b.clientMap) == 0{ //删完client了，该退出了
+				myLogger.Logger.Print("bye 2")
+				goto exit
+			}
+			continue
+		//case <- b.exitChan:
+		//	myLogger.Logger.Print("bye 3")
+		//	goto exit
+		case tmp := <- b.clientChangeChan: //所有对clientMap的操作都放到这个协程来处理
+			myLogger.Logger.Print("here")
 			if tmp.isAdd{
 				b.addClient(tmp.client)
 			}else{
 				b.removeClient(tmp.client.id)
+				if b.needExit && len(b.clientMap) == 0{ //删完client了，该退出了
+					tmp.waitFinished <- true
+					myLogger.Logger.Print("bye 1")
+					//b.exitChan <- "bye"
+					goto exit
+				}
 			}
 			tmp.waitFinished <- true
 			continue
@@ -229,6 +275,8 @@ func (b *Broker) ReadLoop() {
 		
 		
 	}
+	exit:
+		myLogger.Logger.Print("exit broker ReadLoop")
 }
 
 

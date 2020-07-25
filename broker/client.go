@@ -17,7 +17,7 @@ type client struct {
 	id int64
 	conn net.Conn
 	reader *bufio.Reader
-	writerLock sync.RWMutex
+	//writerLock sync.RWMutex
 	writer *bufio.Writer
 	broker *Broker
 	belongGroup string
@@ -51,6 +51,10 @@ func newClient(conn net.Conn, broker *Broker)  *client{
 	return c
 }
 
+//func (c *client)Close() {
+//	c.conn.Close()
+//}
+
 func (c *client)clientHandle() {
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -63,8 +67,9 @@ func (c *client)clientHandle() {
 		wg.Done()
 	}()
 	wg.Wait()
-	myLogger.Logger.Print("a client leave")
+	myLogger.Logger.Print("a client leave1")
 	c.clientExit()
+	myLogger.Logger.Print("a client leave2")
 }
 
 func (c *client)clientExit() {
@@ -141,11 +146,23 @@ func (c *client) writeLoop() {
 			var buf [4]byte
 			bufs := buf[:]
 			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-			c.writerLock.Lock()
-			c.writer.Write(bufs)
-			c.writer.Write(data)
-			c.writer.Flush()
-			c.writerLock.Unlock()
+			//c.writerLock.Lock()
+			_, err = c.writer.Write(bufs)
+			if err != nil {
+				myLogger.Logger.PrintError("writer error: ", err)
+				continue
+			}
+			_, err = c.writer.Write(data)
+			if err != nil {
+				myLogger.Logger.PrintError("writer error: ", err)
+				continue
+			}
+			err = c.writer.Flush()
+			if err != nil {
+				myLogger.Logger.PrintError("writer error: ", err)
+				continue
+			}
+			//c.writerLock.Unlock()
 			//c.sendResponse(response)
 
 		case server2ClientData = <- c.writeCmdChan:
@@ -159,11 +176,23 @@ func (c *client) writeLoop() {
 			var buf [4]byte
 			bufs := buf[:]
 			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-			c.writerLock.Lock()
-			c.writer.Write(bufs)
-			c.writer.Write(data)
-			c.writer.Flush()
-			c.writerLock.Unlock()
+			//c.writerLock.Lock()
+			_, err = c.writer.Write(bufs)
+			if err != nil {
+				myLogger.Logger.PrintError("writer error: ", err)
+				continue
+			}
+			_, err = c.writer.Write(data)
+			if err != nil {
+				myLogger.Logger.PrintError("writer error: ", err)
+				continue
+			}
+			err = c.writer.Flush()
+			if err != nil {
+				myLogger.Logger.PrintError("writer error: ", err)
+				continue
+			}
+			//c.writerLock.Unlock()
 			//c.sendResponse(response)
 		}
 	}

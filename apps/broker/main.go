@@ -12,6 +12,6 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-	b.Main()
-	fmt.Println("bye")
+	b.Run()
+	fmt.Println("main bye")
 }

@@ -108,9 +108,22 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 	var buf [4]byte
 	bufs := buf[:]
 	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	p.conn.Writer.Write(bufs)
-	p.conn.Writer.Write(data)
-	p.conn.Writer.Flush()
+	_, err = p.conn.Writer.Write(bufs)
+	if err != nil {
+		myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
+	_, err = p.conn.Writer.Write(data)
+	if err != nil {
+		myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
+	err = p.conn.Writer.Flush()
+	if err != nil {
+		myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
+	//p.conn.conn.Close()
 	myLogger.Logger.Printf("Pubilsh %s", requestData)
 	response, err:= p.conn.readResponse()
 	if err == nil{

@@ -15,6 +15,7 @@ type producerConn struct {
 	producer *Producer
 	Reader *bufio.Reader
 	Writer *bufio.Writer
+	conn net.Conn
 }
 
 func newConn(addr string, producer *Producer)  (*producerConn, error){
@@ -27,6 +28,7 @@ func newConn(addr string, producer *Producer)  (*producerConn, error){
 		Reader: bufio.NewReader(conn),
 		Writer: bufio.NewWriter(conn),
 		producer: producer,
+		conn: conn,
 	}
 	return c, nil
 }

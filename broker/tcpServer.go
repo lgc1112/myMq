@@ -4,11 +4,13 @@ import (
 	"../mylib/myLogger"
 	"log"
 	"net"
+	. "sync"
 )
 
 type tcpServer struct {
 	broker *Broker
 	addr string
+	listener net.Listener//closee这个就可以关闭startTcpServer协程
 }
 
 
@@ -18,20 +20,30 @@ func newTcpServer(broker *Broker, addr string) *tcpServer{
 }
 
 func (t *tcpServer)startTcpServer() {
-	listener, err := net.Listen("tcp", t.addr)
+	var err error
+	t.listener, err = net.Listen("tcp", t.addr)
 	myLogger.Logger.Print("startTcpServer  " + t.addr)
 	if err != nil {
 		myLogger.Logger.Print(err)
 		log.Fatal(err)
 	}
+	var wg WaitGroup
 	for {
-		conn, err := listener.Accept()
+		conn, err := t.listener.Accept()
 		if err != nil {
 			myLogger.Logger.Print(err)
-			continue
+			break //一般是listener关闭了,则退出这个协程
 		}
 		myLogger.Logger.Print("new client " + conn.RemoteAddr().String())
 		client := newClient(conn, t.broker)
-		go client.clientHandle() // handle one connection at a time
+		wg.Add(1)
+		go func() {
+			client.clientHandle()
+			wg.Done()
+		}()
 	}
+	myLogger.Logger.Print("TCP: close 1")
+	wg.Wait()//等待client协程关闭
+	myLogger.Logger.Print("TCP: close 2")
+
 }
