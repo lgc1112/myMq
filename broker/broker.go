@@ -16,16 +16,16 @@ type Broker struct {
 	addr string
 	tcpServer     *tcpServer
 
-	topicMapLock sync.RWMutex
+	//topicMapLock sync.RWMutex
 	topicMap map[string] *topic
 
-	partitionMapLock sync.RWMutex
+	//partitionMapLock sync.RWMutex
 	partitionMap map[string] *partition
 
-	groupMapLock sync.RWMutex
+	//groupMapLock sync.RWMutex
 	groupMap map[string] *group
 
-	clientMapLock sync.RWMutex
+	//clientMapLock sync.RWMutex
 	clientMap map[int64] *client
 
 	tcpListener   net.Listener
@@ -182,7 +182,7 @@ func (b *Broker) removeClient(clientId int64) {
 	_, ok := b.clientMap[clientId]
 	if !ok {
 		myLogger.Logger.Print("remove broker Client not exist, remain len:", len(b.clientMap))
-		b.clientMapLock.Unlock()
+		//b.clientMapLock.Unlock()
 		return
 	}
 	delete(b.clientMap, clientId)
@@ -302,7 +302,8 @@ func (b *Broker)  creatTopic(data *readData)  (response *protocol.Server2Client)
 		topic = newTopic(topicName, int(partionNum), b)
 		b.addTopic(&topicName, topic)
 		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
+			Key: protocol.Server2ClientKey_SendPartions,
+			Topic: topicName,
 			Partitions: topic.getPartitions(),
 		}
 	}
@@ -316,7 +317,8 @@ func (b *Broker)  getPublisherPartition(data *readData)   (response *protocol.Se
 	if ok {
 		myLogger.Logger.Printf("getPublisherPartition : %s", topicName)
 		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
+			Key: protocol.Server2ClientKey_SendPartions,
+			Topic: topicName,
 			Partitions: topic.getPartitions(),
 		}
 	} else {

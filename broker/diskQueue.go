@@ -63,7 +63,6 @@ func (d *diskQueue)ioLoop()  {
 				if err != nil {
 					myLogger.Logger.PrintError("readDiskMsg OpenFile Error:", err)
 				}
-
 			}
 		}
 		if readyData != nil{
@@ -130,10 +129,6 @@ func (d *diskQueue)readDiskMsg() ([]byte, error) {
 
 	d.msgNum -= 1
 	d.rOffset = d.rOffset + int64(4 + size) //读偏移增加
-
-
-
-
 
 	if d.msgNum == 0{//所有消息读完了，全部归0
 		if d.readFile != nil {

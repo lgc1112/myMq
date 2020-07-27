@@ -10,6 +10,7 @@ enum Server2ClientKey
   ChangeConsumerPartition = 4;
   PushMsg = 5;
   PublishSuccess = 6;
+  SendPartions = 7;
 };
 
 message Server2Client {
@@ -18,6 +19,7 @@ message Server2Client {
   repeated Partition Partitions = 2;
   string MsgPartitionName = 4;
   string MsgGroupName = 5;
+  string Topic = 6;
 }
 
 message Partition {

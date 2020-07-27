@@ -13,7 +13,7 @@ type Consumer struct {
 	conn *consumerConn
 	partitions []*protocol.Partition
 	brokerConnMapLock sync.RWMutex
-	brokerConnMap map[string] *consumerConn 
+	brokerConnMap map[string] *consumerConn  //broker ip映射到consumerConn
 	sendIdx int
 	readChan     chan *readData
 }
@@ -21,17 +21,31 @@ type readData struct {
 	connName string
 	server2ClientData *protocol.Server2Client
 }
+type Handler interface {
+	ProcessMsg(message *protocol.Server2Client)
+}
+//
+//type HandlerFunc func(message *protocol.Server2Client) error
+//
+//
+//func (h HandlerFunc) processMsg(m *protocol.Server2Client) error {
+//	return h(m)
+//}
+
 const logDir string = "./consumer/log/"
 func NewConsumer(addr []string, groupName string) (*Consumer, error) {
 	_, err := myLogger.New(logDir)
-	p := &Consumer{
+	c := &Consumer{
 		addrs: addr,
 		groupName: groupName,
 		readChan: make(chan *readData),
 		brokerConnMap: make(map[string] *consumerConn),
 	}
-
-	return p, err
+	err = c.Connect2Brokers()
+	if err != nil {
+		return nil, err
+	}
+	return c, err
 }
 
 func (c *Consumer) addBrokerConn(conn *consumerConn) {
@@ -108,7 +122,7 @@ func (c *Consumer) CommitReadyNum(num int32) error {
 }
 
 
-func (c *Consumer) ReadLoop() {
+func (c *Consumer) ReadLoop(handler Handler) {
 	for{
 		myLogger.Logger.Print("readLoop")
 		data := <- c.readChan
@@ -116,9 +130,21 @@ func (c *Consumer) ReadLoop() {
 		var response *protocol.Client2Server
 		switch server2ClientData.Key {
 		case protocol.Server2ClientKey_PushMsg:
-			response = c.processMsg(server2ClientData)
+			if handler == nil{//为空则使用默认处理
+				response = c.processMsg(server2ClientData)
+			}else{//否则使用传入参数处理
+				handler.ProcessMsg(server2ClientData)
+				response = &protocol.Client2Server{
+					Key: protocol.Client2ServerKey_ConsumeSuccess,
+					Partition: server2ClientData.MsgPartitionName,
+					GroupName: server2ClientData.MsgGroupName,
+					MsgId: server2ClientData.Msg.Id,
+				}
+			}
 		case protocol.Server2ClientKey_ChangeConsumerPartition:
 			response = c.changeConsumerPartition(server2ClientData)
+		case protocol.Server2ClientKey_Success:
+			myLogger.Logger.Print("success")
 		default:
 			myLogger.Logger.Print("cannot find key :", server2ClientData.Key )
 		}

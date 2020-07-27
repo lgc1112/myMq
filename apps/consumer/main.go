@@ -1,6 +1,7 @@
 package main
 import (
 	"../../mylib/myLogger"
+	"../../protocol"
 	"flag"
 	"fmt"
 	"net"
@@ -18,27 +19,28 @@ func main() {
 	flag.Parse() //解析参数
 
 	brokerAddrs := []string{*addr}
-	consumer, err := consumer.NewConsumer(brokerAddrs,"group0")
+	consumer1, err := consumer.NewConsumer(brokerAddrs,"group0")
 	if err != nil {
 		fmt.Println(err)
-	}
-
-	err = consumer.Connect2Brokers()
-	if err != nil {
-		myLogger.Logger.Print(err)
 		os.Exit(1)
 	}
-	err = consumer.SubscribeTopic("fff")
+	err = consumer1.SubscribeTopic("fff")
 	if err != nil {
 		myLogger.Logger.Print(err)
 		os.Exit(1)
 	}
 	//consumer.CommitReadyNum(10)
-	consumer.ReadLoop()
-	exitCh := make(chan error)
-	<-exitCh
+
+	var myHandle myHandle
+	consumer1.ReadLoop(myHandle)
 	fmt.Println("bye")
 }
+
+type myHandle struct {}
+func (h myHandle) ProcessMsg(message *protocol.Server2Client){
+	myLogger.Logger.Print("Consumer receive data is :", string(message.Msg.Msg))
+}
+
 
 func getIntranetIp() string{
 	addrs, err := net.InterfaceAddrs()

@@ -17,22 +17,19 @@ func main() {
 	}
 	flag.Parse() //解析参数
 
-	pr, err := producer.NewProducer(*brokerAddr)
+	brokerAddrs := []string{*brokerAddr}
+	p, err := producer.NewProducer(brokerAddrs)
 	if err != nil {
 		fmt.Println(err)
-	}
-	err = pr.Connect2Broker()
-	if err != nil {
-		//myLogger.Logger.Printf("connecting to broker error - %s", pr.Addr)
 		os.Exit(1)
 	}
-	pr.CreatTopic("fff", 1)
+	p.CreatTopic("fff", 1)
 	var i int32
 	for ;;i++{
 		s := fmt.Sprintf("hello : %d", i)
 
 		time.Sleep(1*time.Second)
-		pr.Pubilsh("fff", []byte(s), i)
+		p.Pubilsh("fff", []byte(s), 0)
 	}
 	//exitCh := make(chan error)
 	//<-exitCh

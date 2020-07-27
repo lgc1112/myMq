@@ -16,7 +16,7 @@ type consumerConn struct {
 	consumer *Consumer
 	conn net.Conn
 	reader *bufio.Reader
-	writerLock sync.RWMutex
+	//writerLock sync.RWMutex
 	writer *bufio.Writer
 	writeChan     chan *protocol.Client2Server
 	exitChan chan string
@@ -60,6 +60,7 @@ func (c *consumerConn)exit()  {
 	close(c.writeChan)
 	close(c.exitChan)
 }
+
 func (c *consumerConn)readLoop()  {
 	for{
 		myLogger.Logger.Print("readLoop")
@@ -97,6 +98,7 @@ func (c *consumerConn)readLoop()  {
 		c.consumer.readChan <- &readData{c.addr, server2ClientData}
 	}
 }
+
 func (c *consumerConn)writeLoop()  {
 	var request *protocol.Client2Server
 	for{
@@ -110,11 +112,11 @@ func (c *consumerConn)writeLoop()  {
 			var buf [4]byte
 			bufs := buf[:]
 			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-			c.writerLock.Lock()
+			//c.writerLock.Lock()
 			c.writer.Write(bufs)
 			c.writer.Write(data)
 			c.writer.Flush()
-			c.writerLock.Unlock()
+			//c.writerLock.Unlock()
 			myLogger.Logger.Printf("write: %s", request)
 		case <- c.exitChan:
 			goto exit
