@@ -27,6 +27,8 @@ type client struct {
 	exitChan chan string
 	readyNum int32 //客户端目前可接受的数据量
 	changeReadyNum chan int32 //使得readyNum只在writeLoop协程中修改
+	isbrokerExitLock sync.RWMutex
+	isbrokerExit bool
 }
 
 func newClient(conn net.Conn, broker *Broker)  *client{
@@ -73,6 +75,18 @@ func (c *client)clientHandle() {
 }
 
 func (c *client)clientExit() {
+	c.isbrokerExitLock.RLock()
+	if c.isbrokerExit{//如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
+		close(c.writeMsgChan)
+		close(c.writeCmdChan)
+		close(c.changeReadyNum)
+		close(c.exitChan)
+		c.isbrokerExitLock.RUnlock()
+		return
+	}
+	c.isbrokerExitLock.RUnlock()
+
+
 	myLogger.Logger.Print("exit client :", c.id)
 	waitFinished := make(chan bool)
 	c.broker.clientChangeChan <- &clientChange{false, c, waitFinished}//放到broker 的readLoop协程中进行处理，避免频繁使用锁

@@ -24,13 +24,13 @@ func newGroup(name string) *group {
 	}
 }
 func (g *group)getClientPartition(clientId int64)  []*protocol.Partition{
-	//g.clientsLock.RLock()
+	g.clientsLock.RLock()
 	if containClient(g.clients, clientId){
 		myLogger.Logger.Print("get Client exist")
 		defer g.clientsLock.RUnlock()
 		return g.client2PartitionMap[clientId]
 	}
-	//g.clientsLock.RUnlock()
+	g.clientsLock.RUnlock()
 	myLogger.Logger.Print("get Client not exist")
 	return nil
 }

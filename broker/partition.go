@@ -10,11 +10,14 @@ type partition struct {
 	sync.RWMutex
 	name string
 	addr string
-	msgChan     chan *protocol.Message
 	subscribedGroupsLock sync.RWMutex
 	subscribedGroups map[string] *subscribedGroup //groupName -> *client
 	curMsgId int32
+
+	msgChan     chan *protocol.Message
 	msgAskChan     chan *msgAskData
+	exitFinishedChan chan string
+	exitChan chan string
 }
 
 const (
@@ -32,7 +35,9 @@ func newPartition(name, addr string)  *partition{
 		addr : addr,
 		msgChan : make(chan *protocol.Message, msgChanSize),
 		subscribedGroups: make(map[string] *subscribedGroup),
+		exitFinishedChan: make(chan string),
 		msgAskChan: make(chan *msgAskData),
+		exitChan: make(chan string),
 	}
 	go partition.readLoop()
 	return partition
@@ -56,6 +61,8 @@ func (p *partition) readLoop()  {
 	var msg *protocol.Message
 	for{
 		select {
+		case <- p.exitChan:
+			goto exit
 		case msgAskData := <- p.msgAskChan:
 			p.subscribedGroupsLock.RLock()
 			subscribedGroup, ok := p.subscribedGroups[msgAskData.groupName]
@@ -64,7 +71,7 @@ func (p *partition) readLoop()  {
 			}
 			subscribedGroup.msgAskChan <- msgAskData.msgId
 			p.subscribedGroupsLock.RUnlock()
-		case msg = <-p.msgChan:
+		case msg = <- p.msgChan:
 			nextId := p.generateMsgId()
 			internalMsg := &protocol.InternalMessage{
 				Id: nextId,
@@ -84,6 +91,23 @@ func (p *partition) readLoop()  {
 			p.subscribedGroupsLock.RUnlock()
 		}
 	}
+exit:
+	myLogger.Logger.Printf("Partition %s exiting", p.name)
+	p.exit()
+}
+
+func (p *partition) exit(){
+	p.subscribedGroupsLock.Lock()
+	for _, subscribedGroup:= range p.subscribedGroups{
+		subscribedGroup.exit()
+		//<- subscribedGroup.exitFinishedChan
+	}
+	myLogger.Logger.Printf("Partition %s exit finished", p.name)
+	p.subscribedGroupsLock.Unlock()
+	p.exitFinishedChan <- "bb"
+	close(p.msgChan)
+	close(p.msgAskChan)
+	close(p.exitChan)
 }
 
 func (p *partition) addComsummerClient(client *client, groupName string) {

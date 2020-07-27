@@ -196,7 +196,15 @@ func (b *Broker) exit()  {
 	}
 
 	for _, client := range b.clientMap {
+		client.isbrokerExitLock.Lock()
+		client.isbrokerExit = true //标志退出了
+		client.isbrokerExitLock.Unlock()
 		client.conn.Close() //关闭所有conn，从而关闭所有client协程
+	}
+	myLogger.Logger.Print("remove broker Client success, remain len:", len(b.clientMap))
+	for _, partition := range b.partitionMap {
+		partition.exitChan <- "bye par"
+		<- partition.exitFinishedChan
 	}
 
 
@@ -208,70 +216,68 @@ func (b *Broker) ReadLoop() {
 		select {
 		case s := <- b.exitSignal: //退出信号来了
 			myLogger.Logger.Print("exitSignal:", s)
-			b.needExit = true
-			b.exit()
-			if b.needExit && len(b.clientMap) == 0{ //删完client了，该退出了
-				myLogger.Logger.Print("bye 2")
-				goto exit
-			}
-			continue
-		//case <- b.exitChan:
-		//	myLogger.Logger.Print("bye 3")
-		//	goto exit
+			b.needExit = true //标志要退出了
+			b.exit()//关闭所有client
+			goto exit
+			//if b.needExit && len(b.clientMap) == 0{ //没有client，直接退出了
+			//	//myLogger.Logger.Print("bye 2")
+			//	goto exit
+			//}
 		case tmp := <- b.clientChangeChan: //所有对clientMap的操作都放到这个协程来处理
 			myLogger.Logger.Print("here")
 			if tmp.isAdd{
 				b.addClient(tmp.client)
 			}else{
 				b.removeClient(tmp.client.id)
-				if b.needExit && len(b.clientMap) == 0{ //删完client了，该退出了
-					tmp.waitFinished <- true
-					myLogger.Logger.Print("bye 1")
-					//b.exitChan <- "bye"
-					goto exit
-				}
+				//if b.needExit && len(b.clientMap) == 0{ //删完client了，该退出了
+				//	tmp.waitFinished <- true
+				//	//myLogger.Logger.Print("bye 1")
+				//	goto exit
+				//}
 			}
 			tmp.waitFinished <- true
-			continue
 		case data = <- b.readChan:
+			//if b.needExit {
+			//	continue //需要关闭了，不再处理新消息
+			//}
+			clientConn, ok := b.getClient(data.clientID)
+			if !ok {
+				myLogger.Logger.Print("client conn have close", data)
+				continue
+			}
 
+			myLogger.Logger.Print("Broker read new data")
+
+
+			var response *protocol.Server2Client
+			switch data.client2serverData.Key {
+			case protocol.Client2ServerKey_CreatTopic:
+				response = b.creatTopic(data)
+			case protocol.Client2ServerKey_GetPublisherPartition:
+				response = b.getPublisherPartition(data)
+			case protocol.Client2ServerKey_Publish:
+				response = b.publish(data)
+			case protocol.Client2ServerKey_GetConsumerPartition:
+				response = b.getConsumerPartition(data)
+			case protocol.Client2ServerKey_SubscribePartion:
+				response = b.subscribePartition(data)
+			case protocol.Client2ServerKey_SubscribeTopic:
+				response = b.subscribeTopic(data)
+			case protocol.Client2ServerKey_RegisterConsumer:
+				response = b.registerConsumer(data)
+			case protocol.Client2ServerKey_UnRegisterConsumer:
+				response = b.unRegisterConsumer(data)
+			case protocol.Client2ServerKey_ConsumeSuccess:
+				response = b.consumeSuccess(data)
+			default:
+				myLogger.Logger.Print("cannot find key")
+			}
+			if response != nil{
+				clientConn.writeCmdChan <- response
+			}
 		}
 
-		clientConn, ok := b.getClient(data.clientID)
-		if !ok {
-			myLogger.Logger.Print("client conn have close", data)
-			continue
-		}
 
-		myLogger.Logger.Print("Broker read new data")
-
-
-		var response *protocol.Server2Client
-		switch data.client2serverData.Key {
-		case protocol.Client2ServerKey_CreatTopic:
-			response = b.creatTopic(data)
-		case protocol.Client2ServerKey_GetPublisherPartition:
-			response = b.getPublisherPartition(data)
-		case protocol.Client2ServerKey_Publish:
-			response = b.publish(data)
-		case protocol.Client2ServerKey_GetConsumerPartition:
-			response = b.getConsumerPartition(data)
-		case protocol.Client2ServerKey_SubscribePartion:
-			response = b.subscribePartition(data)
-		case protocol.Client2ServerKey_SubscribeTopic:
-			response = b.subscribeTopic(data)
-		case protocol.Client2ServerKey_RegisterConsumer:
-			response = b.registerConsumer(data)
-		case protocol.Client2ServerKey_UnRegisterConsumer:
-			response = b.unRegisterConsumer(data)
-		case protocol.Client2ServerKey_ConsumeSuccess:
-			response = b.consumeSuccess(data)
-		default:
-			myLogger.Logger.Print("cannot find key")
-		}
-		if response != nil{
-			clientConn.writeCmdChan <- response
-		}
 		
 		
 	}

@@ -7,6 +7,7 @@ import (
 	"container/list"
 	"errors"
 	"github.com/golang/protobuf/proto"
+	"sync"
 	"time"
 )
 
@@ -15,8 +16,7 @@ const retryTime = 1000 * time.Millisecond //队列重试时间
 type subscribedGroup struct {
 	name string
 	partitionName string
-	readChan chan *protocol.InternalMessage
-	preparedMsgChan chan *protocol.InternalMessage
+	wg sync.WaitGroup
 	//consumerClientLock sync.RWMutex
 	consumerClient *client //限制在IOloop进程中修改，不加锁
 	priorityQueue *priorityQueue
@@ -24,7 +24,13 @@ type subscribedGroup struct {
 
 	inFlightMsgMap map[int32] *list.Element
 
+
+	readChan chan *protocol.InternalMessage
+	preparedMsgChan chan *protocol.InternalMessage
 	clientChangeChan     chan *clientChange
+	readLoopExitChan chan string
+	writeLoopExitChan chan string
+	//exitFinishedChan chan string
 	msgAskChan     chan int32
 	diskQueue *diskQueue
 }
@@ -36,6 +42,9 @@ func newPartionGroup(name, partitionName string) *subscribedGroup  {
 		preparedMsgChan: make(chan *protocol.InternalMessage),
 		clientChangeChan: make(chan *clientChange),
 		msgAskChan: make(chan int32),
+		readLoopExitChan: make(chan string),
+		writeLoopExitChan: make(chan string),
+		//exitFinishedChan: make(chan string),
 		inFlightMsgMap: make(map[int32] *list.Element),
 		priorityQueue: NewPriorityQueue(queueSize),
 		inflightQueue: list.New(),
@@ -43,11 +52,70 @@ func newPartionGroup(name, partitionName string) *subscribedGroup  {
 		name: name,
 		diskQueue: NewDiskQueue("./data/" + partitionName + "/" + name + "/"),
 	}
-	
-	go g.readLoop()
-	go g.writeLoop()
+	g.wg.Add(2)
+	go func() {
+		g.readLoop()
+		g.wg.Done()
+	}()
+	go func() {
+		g.writeLoop()
+		g.wg.Done()
+	}()
 	return g
 }
+
+
+func (g *subscribedGroup) exit(){
+	myLogger.Logger.Print("subscribedGroup exiting")
+	g.writeLoopExitChan <- "bye"
+	g.readLoopExitChan <- "bye"
+	g.wg.Wait() //等待两个loop退出
+	for {//把inflight数据全部存入磁盘
+		e := g.inflightQueue.Front()
+		if e == nil{
+			break
+		}
+		inflightMes := e.Value.(*protocol.InternalMessage)
+		g.popInflightMsg(inflightMes.Id)
+
+		data, err := proto.Marshal(inflightMes)
+		if err != nil{
+			myLogger.Logger.PrintError("Marshal :", err)
+		}
+		err = g.diskQueue.storeData(data)
+		if err != nil{
+			myLogger.Logger.PrintError("storeData :", err)
+		}
+		myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", inflightMes, g.diskQueue.msgNum)
+	}
+	for g.priorityQueue.Len() > 0{ //把优先级队列的数据全部存入磁盘
+		myLogger.Logger.Print("read Data from priorityQueue")
+		priorityQueueData := heap.Pop(g.priorityQueue).(*protocol.InternalMessage)
+		data, err := proto.Marshal(priorityQueueData)
+		if err != nil{
+			myLogger.Logger.PrintError("Marshal :", err)
+		}
+		err = g.diskQueue.storeData(data)
+		if err != nil{
+			myLogger.Logger.PrintError("storeData :", err)
+		}
+		myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", priorityQueueData, g.diskQueue.msgNum)
+	}
+	err := g.diskQueue.persistDiskData()
+	if err != nil{
+		myLogger.Logger.PrintError("persistDiskData :", err)
+	}
+	myLogger.Logger.Print("subscribedGroup exit finished")
+	//g.exitFinishedChan <- "bye "
+	//myLogger.Logger.Print("subscribedGroup exit finished2")
+	close(g.readChan)
+	close(g.preparedMsgChan)
+	close(g.clientChangeChan)
+	close(g.msgAskChan)
+	close(g.readLoopExitChan)
+	close(g.writeLoopExitChan)
+}
+
 func (g *subscribedGroup) pushInflightMsg(msg *protocol.InternalMessage) error{
 	msg.Timeout = time.Now().Add(retryTime).UnixNano() //设置超时时间
 	_, ok := g.inFlightMsgMap[msg.Id]
@@ -73,6 +141,7 @@ func (g *subscribedGroup) popInflightMsg(msgId int32) error{
 	delete(g.inFlightMsgMap, msgId)
 	return nil
 }
+
 func (g *subscribedGroup) writeLoop()  {
 	var msg *protocol.InternalMessage
 	var preparedMsgChan chan *protocol.InternalMessage
@@ -84,6 +153,11 @@ func (g *subscribedGroup) writeLoop()  {
 	//retryTickerChan = nil
 	for{
 		select {
+		case <- g.writeLoopExitChan: //要退出了，保存好pushMsg中的临时数据，防止丢失
+			if pushMsg != nil{ //
+				g.pushInflightMsg(msg)
+			}
+			goto exit
 		case tmp := <- g.clientChangeChan:
 			if tmp.isAdd{//添加或修改client
 				g.consumerClient = tmp.client
@@ -165,6 +239,9 @@ func (g *subscribedGroup) writeLoop()  {
 
 
 	}
+	exit:
+		myLogger.Logger.Print("writeLoop exit")
+
 }
 
 func (g *subscribedGroup) readLoop()  {
@@ -195,6 +272,14 @@ func (g *subscribedGroup) readLoop()  {
 		}
 
 		select {
+		case <- g.readLoopExitChan: //要退出了，保存好这两个内存中的数据，防止丢失
+			if memReadyData != nil{ //
+				heap.Push(g.priorityQueue, memReadyData)
+			}
+			if diskReadyData != nil{
+				heap.Push(g.priorityQueue, diskReadyData)
+			}
+			goto exit
 		case bytes := <- diskReadyChan: //有磁盘数据可读
 			if diskReadyData != nil {
 				myLogger.Logger.PrintError("Should not come here")
@@ -240,6 +325,8 @@ func (g *subscribedGroup) readLoop()  {
 		}
 
 	}
+	exit:
+		myLogger.Logger.Print("readLoop exit")
 }
 
 //func (g *subscribedGroup) readLoop()  {
