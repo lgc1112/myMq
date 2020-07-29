@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-const queueSize = 1024 * 1024 //队列大小
-const retryTime = 1000 * time.Millisecond //队列重试时间
+const queueSize = 1//队列大小
+const retryTime = 1000 * time.Millisecond//队列重试时间
 const MaxTryTime = 10 //最多重试的时间
 type subscribedGroup struct {
 	name string
@@ -52,8 +52,8 @@ func newPartionGroup(name, partitionName string) *subscribedGroup  {
 		inflightQueue: list.New(),
 		partitionName: partitionName,
 		name: name,
-		diskQueue1: NewDiskQueue("./data/" + partitionName + "/" + name + "-1/"),
-		diskQueue2: NewDiskQueue("./data/" + partitionName + "/" + name + "-2/"),
+		diskQueue1: NewDiskQueue("./data/" + partitionName + "/" + name + "-p1/"),
+		diskQueue2: NewDiskQueue("./data/" + partitionName + "/" + name + "-p2/"),
 	}
 	g.wg.Add(2)
 	go func() {
@@ -75,7 +75,7 @@ func (g *subscribedGroup) exit(){
 	g.wg.Wait() //等待两个loop退出
 	for {//把inflight数据全部存入磁盘
 		e := g.inflightQueue.Front()
-		if e == nil{
+		if e == nil{//读完了
 			break
 		}
 		inflightMes := e.Value.(*protocol.InternalMessage)
@@ -121,11 +121,11 @@ func (g *subscribedGroup) exit(){
 
 
 
-	err := g.diskQueue1.persistDiskData()
+	err := g.diskQueue1.sync()
 	if err != nil{
 		myLogger.Logger.PrintError("persistDiskData1 :", err)
 	}
-	err = g.diskQueue2.persistDiskData()
+	err = g.diskQueue2.sync()
 	if err != nil{
 		myLogger.Logger.PrintError("persistDiskData2 :", err)
 	}
@@ -138,6 +138,7 @@ func (g *subscribedGroup) exit(){
 	close(g.msgAskChan)
 	close(g.readLoopExitChan)
 	close(g.writeLoopExitChan)
+
 }
 
 func (g *subscribedGroup) pushInflightMsg(msg *protocol.InternalMessage) error{
@@ -248,20 +249,26 @@ func (g *subscribedGroup) writeLoop()  {
 					break
 				}
 				inflightMes := e.Value.(*protocol.InternalMessage)
-				if inflightMes.Timeout < time.Now().UnixNano() { //未超时，不处理
+				if inflightMes.Timeout > time.Now().UnixNano() { //未超时，不处理
 					break
 				}
-				if inflightMes.TryTimes > int32(MaxTryTime) {
-					myLogger.Logger.Print("intflightQueue try too many times :", inflightMes.TryTimes)
+				//now:= time.Now()
+				//myLogger.Logger.PrintDebug( inflightMes.Timeout , now.UnixNano())
+				//inflightMes.Timeout = now.Add(retryTime).UnixNano() //设置超时时间
+				//myLogger.Logger.PrintDebug( inflightMes.Timeout ,retryTime)
+				if inflightMes.TryTimes > int32(MaxTryTime) {//重传太多次了，不传了，输出警告
+					myLogger.Logger.PrintWarning("intflightQueue try too many times :", inflightMes.TryTimes)
+					continue
 				}
-				myLogger.Logger.Print("intflightQueue mes time out")
+				myLogger.Logger.PrintDebug("intflightQueue mes time out", g.inflightQueue.Len())
 				g.readChan <- inflightMes //此管道阻塞时，会有存磁盘操作，所以不会长时间阻塞，重新给group消费
 				g.popInflightMsg(inflightMes.Id)
 			}
 		}
 	}
-	exit:
-		myLogger.Logger.Print("writeLoop exit")
+exit:
+	myLogger.Logger.Print("writeLoop exit")
+	retryTicker.Stop()
 
 }
 
@@ -283,9 +290,9 @@ func (g *subscribedGroup) readLoop()  {
 		}else{//磁盘数据准备好了
 			if g.circleQueue1.Len() < queueSize{//放到内存队列
 				g.circleQueue1.Push(diskReadyData1) //放到队列末尾
-				diskReadyData1 = nil
-				diskReadyChan1 = g.diskQueue1.readyChan //可从磁盘读数据
-				myLogger.Logger.Printf("push Msg %s to circleQueue, present Len: %d", msg, g.circleQueue1.Len())
+				myLogger.Logger.Printf("push Msg %s to circleQueue, present Len: %d", diskReadyData1, g.circleQueue1.Len())
+				diskReadyData1 = nil//清空
+				diskReadyChan1 = g.diskQueue1.readyChan //可从磁盘读新数据
 			}else{
 				diskReadyChan1 = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
 			}
@@ -297,8 +304,8 @@ func (g *subscribedGroup) readLoop()  {
 		}else{//磁盘数据准备好了
 			if g.circleQueue2.Len() < queueSize{//放到内存队列
 				g.circleQueue2.Push(diskReadyData2) //放到队列末尾
-				diskReadyData2 = nil
-				diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读数据
+				diskReadyData2 = nil//清空
+				diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读新数据
 				myLogger.Logger.Printf("push Msg %s to circleQueue, present Len: %d", msg, g.circleQueue1.Len())
 			}else{
 				diskReadyChan2 = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
@@ -355,10 +362,10 @@ func (g *subscribedGroup) readLoop()  {
 				myLogger.Logger.PrintError("Should not come here")
 			}
 			memReadyData = nil
-		case msg = <-g.readChan:
+		case msg = <-g.readChan://新数据到了
 			msg.TryTimes++ //重试次数加一
 			if msg.Priority == 0{
-				if g.circleQueue1.Len() < queueSize && g.diskQueue1.msgNum == 0{//只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
+				if g.circleQueue1.Len() < queueSize{// && g.diskQueue1.msgNum == 0，只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
 					g.circleQueue1.Push(msg)
 					//heap.Push(g.priorityQueue, msg)
 					myLogger.Logger.Printf("push Msg %s to circleQueue1, present Len: %d", msg, g.circleQueue1.Len())
@@ -374,7 +381,7 @@ func (g *subscribedGroup) readLoop()  {
 					myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", msg, g.diskQueue1.msgNum)
 				}
 			}else{//高优先级
-				if g.circleQueue2.Len() < queueSize && g.diskQueue2.msgNum == 0{//只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
+				if g.circleQueue2.Len() < queueSize{// && g.diskQueue2.msgNum == 0，只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
 					g.circleQueue2.Push(msg)
 					//heap.Push(g.priorityQueue, msg)
 					myLogger.Logger.Printf("push Msg %s to circleQueue2, present Len: %d", msg, g.circleQueue2.Len())

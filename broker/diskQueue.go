@@ -23,13 +23,14 @@ type diskQueue struct {
 	readyChan chan []byte
 	writeChan chan []byte
 	writeFinished chan error
+	exitChan chan string
 
 	maxBytesPerFile int64
 
 	readFile  *os.File
 	writeFile *os.File
 	reader    *bufio.Reader
-	writer    *bufio.Writer
+	//writer    *bufio.Writer
 }
 
 func NewDiskQueue(path string) *diskQueue{
@@ -37,6 +38,7 @@ func NewDiskQueue(path string) *diskQueue{
 		path: path,
 		readyChan: make(chan []byte),
 		writeChan: make(chan []byte),
+		exitChan: make(chan string),
 		writeFinished: make(chan error),
 		maxBytesPerFile: MaxBytesPerFile,
 		fileName : path + "disk.data",
@@ -52,13 +54,23 @@ func NewDiskQueue(path string) *diskQueue{
 	return d
 }
 
+
+func (d *diskQueue) exit() error {
+	err := d.sync()//保存数据
+	close(d.readyChan)
+	close(d.writeChan)
+	close(d.exitChan)
+	close(d.writeFinished)
+	return err
+}
+
 func (d *diskQueue)ioLoop()  {
 	var readyData []byte
 	var err error
 	var readyChan chan []byte
 	for {
 		if d.msgNum > 0 { //磁盘中有数据可读
-			if readyData == nil {
+			if readyData == nil {//没有要发送的数据，可以读新的数据发送了
 				readyData, err = d.readDiskMsg()
 				if err != nil {
 					myLogger.Logger.PrintError("readDiskMsg OpenFile Error:", err)
@@ -71,12 +83,20 @@ func (d *diskQueue)ioLoop()  {
 			readyChan = nil //无数据，让其阻塞
 		}
 		select {
+		case <- d.exitChan:
+			goto exit
 		case readyChan <- readyData: //尝试将数据发送到readChan
 			readyData = nil //发送完毕
 		case dataWrite := <-d.writeChan: //有数据要写磁盘
-			d.writeFinished <- d.writeDiskMsg(dataWrite)  //写磁盘
+			d.writeFinished <- d.writeDiskMsg(dataWrite)  //写磁盘并通知
 		}
 	}
+	exit:
+		err = d.exit()
+		if err != nil{
+			myLogger.Logger.PrintError(err)
+		}
+		myLogger.Logger.Print("diskQueue ioLoop exit")
 
 }
 
@@ -292,6 +312,7 @@ func (d *diskQueue) retrieveDiskData() error {
 		d.wFileNum, d.wOffset, d.msgNum)
 	return nil
 }
+
 
 func (d *diskQueue) persistDiskData() error {
 	f, err := os.OpenFile(d.fileName, os.O_RDWR|os.O_CREATE, os.ModePerm)

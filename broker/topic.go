@@ -23,6 +23,8 @@ func newTopic(name string, partitionNum int, broker *Broker) *topic {
 	}
 
 	addr := broker.addr
+
+	broker.partitionMapLock.Lock()
 	for i := 0; i < partitionNum; i++{
 		partitionName := name + "-" + strconv.Itoa(i)
 		partition := newPartition(partitionName, addr)
@@ -31,6 +33,7 @@ func newTopic(name string, partitionNum int, broker *Broker) *topic {
 		//t.partitionMapLock.Unlock()
 		broker.addPartition(&partitionName, partition)
 	}
+	broker.partitionMapLock.Unlock()
 	atomic.StoreInt64(&t.maxPartitionNum, int64(partitionNum))
 
 	return t

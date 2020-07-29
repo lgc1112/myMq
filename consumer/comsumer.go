@@ -1,6 +1,5 @@
 package consumer
 
-
 import (
 	"../mylib/myLogger"
 	"../protocol"
@@ -16,6 +15,7 @@ type Consumer struct {
 	brokerConnMap map[string] *consumerConn  //broker ip映射到consumerConn
 	sendIdx int
 	readChan     chan *readData
+
 }
 type readData struct {
 	connName string
@@ -123,40 +123,107 @@ func (c *Consumer) CommitReadyNum(num int32) error {
 
 
 func (c *Consumer) ReadLoop(handler Handler) {
+	//testTime := 10 * time.Second
+	//var i int64
+	//timeTicker := time.NewTicker(testTime)
+	//timeTickerChan := timeTicker.C
+
 	for{
-		myLogger.Logger.Print("readLoop")
-		data := <- c.readChan
-		server2ClientData := data.server2ClientData
-		var response *protocol.Client2Server
-		switch server2ClientData.Key {
-		case protocol.Server2ClientKey_PushMsg:
-			if handler == nil{//为空则使用默认处理
-				response = c.processMsg(server2ClientData)
-			}else{//否则使用传入参数处理
-				handler.ProcessMsg(server2ClientData)
-				response = &protocol.Client2Server{
-					Key: protocol.Client2ServerKey_ConsumeSuccess,
-					Partition: server2ClientData.MsgPartitionName,
-					GroupName: server2ClientData.MsgGroupName,
-					MsgId: server2ClientData.Msg.Id,
+		select {
+		//case <- timeTickerChan:
+		//	myLogger.Logger.Print("readLoop timeout: testtime")
+		//	timeTicker.Stop()
+		//	return
+		case data := <- c.readChan:
+			myLogger.Logger.Print("readLoop")
+
+			server2ClientData := data.server2ClientData
+			var response *protocol.Client2Server
+			switch server2ClientData.Key {
+			case protocol.Server2ClientKey_PushMsg:
+				if handler == nil{//为空则使用默认处理
+					response = c.processMsg(server2ClientData)
+				}else{//否则使用传入参数处理
+					handler.ProcessMsg(server2ClientData)
+					response = &protocol.Client2Server{
+						Key: protocol.Client2ServerKey_ConsumeSuccess,
+						Partition: server2ClientData.MsgPartitionName,
+						GroupName: server2ClientData.MsgGroupName,
+						MsgId: server2ClientData.Msg.Id,
+					}
+				}
+			case protocol.Server2ClientKey_ChangeConsumerPartition:
+				response = c.changeConsumerPartition(server2ClientData)
+			case protocol.Server2ClientKey_Success:
+				myLogger.Logger.Print("success")
+			default:
+				myLogger.Logger.Print("cannot find key :", server2ClientData.Key )
+			}
+			if response != nil { //ask
+				conn, ok := c.getBrokerConn(&data.connName)
+				if ok {
+					//myLogger.Logger.Print("write response", response)
+					conn.writeChan <- response
+				}else{
+					myLogger.Logger.Print("conn cannot find", data.connName)
 				}
 			}
-		case protocol.Server2ClientKey_ChangeConsumerPartition:
-			response = c.changeConsumerPartition(server2ClientData)
-		case protocol.Server2ClientKey_Success:
-			myLogger.Logger.Print("success")
-		default:
-			myLogger.Logger.Print("cannot find key :", server2ClientData.Key )
+
 		}
-		if response != nil { //ask
-			conn, ok := c.getBrokerConn(&data.connName)
-			if ok {
-				myLogger.Logger.Print("write response", response)
-				conn.writeChan <- response
-			}else{
-				myLogger.Logger.Print("conn cannot find", data.connName)
+
+	}
+}
+
+
+func (c *Consumer) ReadLoopInTime(handler Handler) {
+	//testTime := 10 * time.Second
+	//var i int64
+	//timeTicker := time.NewTicker(testTime)
+	//timeTickerChan := timeTicker.C
+
+	for{
+		select {
+		//case <- timeTickerChan:
+		//	myLogger.Logger.Print("readLoop timeout: testtime")
+		//	timeTicker.Stop()
+		//	return
+		case data := <- c.readChan:
+			myLogger.Logger.Print("readLoop")
+
+			server2ClientData := data.server2ClientData
+			var response *protocol.Client2Server
+			switch server2ClientData.Key {
+			case protocol.Server2ClientKey_PushMsg:
+				if handler == nil{//为空则使用默认处理
+					response = c.processMsg(server2ClientData)
+				}else{//否则使用传入参数处理
+					handler.ProcessMsg(server2ClientData)
+					response = &protocol.Client2Server{
+						Key: protocol.Client2ServerKey_ConsumeSuccess,
+						Partition: server2ClientData.MsgPartitionName,
+						GroupName: server2ClientData.MsgGroupName,
+						MsgId: server2ClientData.Msg.Id,
+					}
+				}
+			case protocol.Server2ClientKey_ChangeConsumerPartition:
+				response = c.changeConsumerPartition(server2ClientData)
+			case protocol.Server2ClientKey_Success:
+				myLogger.Logger.Print("success")
+			default:
+				myLogger.Logger.Print("cannot find key :", server2ClientData.Key )
 			}
+			if response != nil { //ask
+				conn, ok := c.getBrokerConn(&data.connName)
+				if ok {
+					myLogger.Logger.Print("write response", response)
+					conn.writeChan <- response
+				}else{
+					myLogger.Logger.Print("conn cannot find", data.connName)
+				}
+			}
+
 		}
+
 	}
 }
 

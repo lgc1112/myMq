@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="PASSWORD" host="9.134.50.139" id="e920de08-a1e8-4a9e-aa2c-950bb1b997bb" port="36000" nameFormat="DESCRIPTIVE" username="regangcli" />
+    </configs>
+  </component>
+</project>

@@ -133,14 +133,24 @@ func (p *Producer) getPartition(topic string) (*protocol.Partition){ //循环读
 	defer p.partitionMapLock.RUnlock()
 	partitions, ok := p.partitionMap[topic]
 	if !ok {
-		myLogger.Logger.Printf("topic not exist", topic)
-		err := p.getTopicPartition(topic)
+		myLogger.Logger.Print("topic not exist :", topic)
+		err := p.GetTopicPartition(topic)
 		if err != nil {
 			myLogger.Logger.Print("getPartition error: ", err)
 			return nil
 		}
 	}
-	len := len(p.partitionMap[topic])
+	partitions, ok = p.partitionMap[topic]
+	if !ok {
+		myLogger.Logger.Print("topic not exist :", topic)
+		err := p.GetTopicPartition(topic)
+		if err != nil {
+			myLogger.Logger.Print("getPartition error: ", err)
+			return nil
+		}
+	}
+
+	len := len(partitions)
 	if len == 0{
 		myLogger.Logger.Print("getPartition err")
 		return nil
@@ -250,12 +260,12 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 //}
 
 
-func (p *Producer) getTopicPartition(topic string) error{
+func (p *Producer) GetTopicPartition(topic string) error{
 	requestData := &protocol.Client2Server{
 		Key: protocol.Client2ServerKey_GetPublisherPartition,
 		Topic: topic,
 	}
-	p.conn.writeChan <- requestData
+	//p.conn.writeChan <- requestData
 
 	data, err := proto.Marshal(requestData)
 	if err != nil {

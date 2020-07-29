@@ -37,16 +37,16 @@ func (g *group)getClientPartition(clientId int64)  []*protocol.Partition{
 
 func (g *group)addClient(client *client)  bool{
 	//g.clientsLock.RLock()
+	g.clientsLock.Lock()
 	if containClient(g.clients, client.id){
 		myLogger.Logger.Print("addClient exist")
 		//g.clientsLock.RUnlock()
 		return false
 	}
 	//g.clientsLock.RUnlock()
-	//g.clientsLock.Lock()
 	g.clients = append(g.clients, client)
 	myLogger.Logger.Print("addClient success, num: ", len(g.clients))
-	//g.clientsLock.Unlock()
+	g.clientsLock.Unlock()
 	return true
 }
 func containClient(items []*client, item int64) bool {
@@ -59,11 +59,11 @@ func containClient(items []*client, item int64) bool {
 }
 
 func (g *group) deleteClient(clientId int64) (succ bool){
+	g.clientsLock.Lock()
 	if !containClient(g.clients, clientId){
 		myLogger.Logger.Print("deleteClient not exist")
 		return false
 	}
-	g.clientsLock.Lock()
 	j := 0
 	for _, client := range g.clients {
 		if client.id != clientId {

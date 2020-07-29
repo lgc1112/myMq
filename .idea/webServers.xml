@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="f099f50b-57c8-4ea2-a9d4-a76184ad971f" name="readyDev">
+        <fileTransfer rootFolder="/home/regangcli" accessType="SFTP" host="9.134.50.139" port="36000" sshConfigId="e920de08-a1e8-4a9e-aa2c-950bb1b997bb" sshConfig="regangcli@9.134.50.139:36000 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

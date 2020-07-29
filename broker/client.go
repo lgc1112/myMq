@@ -27,7 +27,7 @@ type client struct {
 	exitChan chan string
 	readyNum int32 //客户端目前可接受的数据量
 	changeReadyNum chan int32 //使得readyNum只在writeLoop协程中修改
-	isbrokerExitLock sync.RWMutex
+	isbrokerExitLock1 sync.RWMutex
 	isbrokerExit bool
 }
 
@@ -75,16 +75,21 @@ func (c *client)clientHandle() {
 }
 
 func (c *client)clientExit() {
-	c.isbrokerExitLock.RLock()
+	c.isbrokerExitLock1.RLock()
 	if c.isbrokerExit{//如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
+		myLogger.Logger.Print("exit client isbrokerExit:", c.id)
+		waitFinished := make(chan bool)
+		c.broker.clientChangeChan <- &clientChange{false, c, waitFinished}//放到broker 的readLoop协程中进行处理，避免频繁使用锁
+		<- waitFinished //等待移除
+
 		close(c.writeMsgChan)
 		close(c.writeCmdChan)
 		close(c.changeReadyNum)
 		close(c.exitChan)
-		c.isbrokerExitLock.RUnlock()
+		c.isbrokerExitLock1.RUnlock()
 		return
 	}
-	c.isbrokerExitLock.RUnlock()
+	c.isbrokerExitLock1.RUnlock()
 
 
 	myLogger.Logger.Print("exit client :", c.id)
@@ -100,10 +105,15 @@ func (c *client)clientExit() {
 		myLogger.Logger.Printf("exit client belong to group : %s", c.belongGroup)
 		succ:= group.deleteClient(c.id) //从group中删除
 		if succ {
-			group.rebalance()
+			c.isbrokerExitLock1.RLock()
+			if !c.isbrokerExit { //如果是broker退出了不用做负载均衡操作。
+				group.rebalance()
+			}
+			c.isbrokerExitLock1.RUnlock()
 		}
 	}
 
+	c.broker.partitionMapLock.RLock()
 	//从partition中删除
 	for partitionName, _ := range c.consumePartions{//delete from partition
 		partition, ok := c.broker.getPartition(&partitionName)
@@ -114,8 +124,13 @@ func (c *client)clientExit() {
 			partition.invalidComsummerClient(c, c.belongGroup)
 		}
 	}
+	c.broker.partitionMapLock.RUnlock()
 
-	c.conn.Close()
+	c.isbrokerExitLock1.RLock()
+	if !c.isbrokerExit { //如果是broker退出了说明conn已经关闭了
+		c.conn.Close()
+	}
+	c.isbrokerExitLock1.RUnlock()
 	close(c.writeMsgChan)
 	close(c.writeCmdChan)
 	close(c.changeReadyNum)
@@ -254,8 +269,20 @@ func (c *client)readLoop() {
 		}
 		if client2ServerData.Key == protocol.Client2ServerKey_ConsumeSuccess{//如果向客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
 			c.changeReadyNum <- -1 //修改readyCount++
+			response := c.consumeSuccess(client2ServerData)
+			if response != nil{
+				c.writeCmdChan <- response
+			}
+			continue
 		}
-		c.broker.readChan <- &readData{c.id, client2ServerData}
+		if client2ServerData.Key == protocol.Client2ServerKey_Publish{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
+			response := c.publish(client2ServerData)
+			if response != nil{
+				c.writeCmdChan <- response
+			}
+			continue
+		}
+		c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
 
 		//var response *protocol.Server2Client
 		//switch request.Key {
@@ -284,6 +311,55 @@ func (c *client)readLoop() {
 	}
 }
 
+func (c *client)  consumeSuccess(client2ServerData *protocol.Client2Server)   (response *protocol.Server2Client) {
+	partitionName := client2ServerData.Partition
+
+	c.broker.partitionMapLock.RLock()
+	defer c.broker.partitionMapLock.RUnlock()
+
+	partition, ok := c.broker.getPartition(&partitionName)
+	if !ok {
+		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
+		response = &protocol.Server2Client{
+			Key: protocol.Server2ClientKey_TopicNotExisted,
+		}
+		return response
+	}else {
+		//myLogger.Logger.Printf("publish msg : %s", msg.String())
+		msgAskData := &msgAskData{
+			msgId: client2ServerData.MsgId,
+			groupName: client2ServerData.GroupName,
+		}
+		partition.msgAskChan <- msgAskData
+		//response = &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_Success,
+		//}
+		return nil
+	}
+}
+
+func (c *client)  publish(client2ServerData *protocol.Client2Server)  (response *protocol.Server2Client) {
+	partitionName := client2ServerData.Partition
+	msg := client2ServerData.Msg
+	c.broker.partitionMapLock.RLock()
+	defer c.broker.partitionMapLock.RUnlock()
+	partition, ok := c.broker.getPartition(&partitionName)
+	if !ok {
+		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
+		response = &protocol.Server2Client{
+			Key: protocol.Server2ClientKey_TopicNotExisted,
+		}
+		return response
+	}else{
+		myLogger.Logger.Printf("publish msg : %s", msg.String())
+		partition.msgChan <- msg
+		response = &protocol.Server2Client{
+			Key: protocol.Server2ClientKey_Success,
+		}
+		return response
+	}
+
+}
 
 //
 //func (c *client) sendResponse2(response *protocol.Server2Client)  error{
