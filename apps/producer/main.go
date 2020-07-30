@@ -13,8 +13,8 @@ import (
 import "../../producer"
 
 var sum int32
-const  testTime = 10 * time.Second//测试时间
-const producerNum = 2000
+const  testTime = 10000 * time.Second//测试时间
+const producerNum = 1
 const partitionNum = 10
 func main() {
 	fmt.Println("producer start")

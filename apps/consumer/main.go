@@ -15,8 +15,8 @@ import "../../consumer"
 
 
 var sum int32
-const  testTime = 10 * time.Second//测试时间
-const consumerNum = 1
+const  testTime = 20000 * time.Second//测试时间
+const consumerNum = 10
 func main() {
 	addr := flag.String("addr", "0.0.0.0:12345", "ip:port")
 	flag.Parse() //解析参数

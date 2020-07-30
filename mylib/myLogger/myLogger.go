@@ -76,17 +76,17 @@ func New(logDir string) (*MyLogger, error) {
 }
 
 func (l *MyLogger) Print(v ...interface{}) {
-	//fmt.Print("info:")
-	//fmt.Print(v...)
-	//fmt.Println()
-	//l.infoLogger.Output(2, fmt.Sprint(v...))
+	fmt.Print("info:")
+	fmt.Print(v...)
+	fmt.Println()
+	l.infoLogger.Output(2, fmt.Sprint(v...))
 }
 
 func (l *MyLogger) Printf(format string, v ...interface{}) {
-	//fmt.Print("info:")
-	//fmt.Printf(format, v...)
-	//fmt.Println()
-	//l.infoLogger.Output(2, fmt.Sprintf(format, v...))
+	fmt.Print("info:")
+	fmt.Printf(format, v...)
+	fmt.Println()
+	l.infoLogger.Output(2, fmt.Sprintf(format, v...))
 }
 
 func (l *MyLogger) PrintfError(format string, v ...interface{}) {

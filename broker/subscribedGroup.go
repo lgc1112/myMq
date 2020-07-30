@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const queueSize = 1//队列大小
+const queueSize = 1024*1024*10//队列大小
 const retryTime = 1000 * time.Millisecond//队列重试时间
 const MaxTryTime = 10 //最多重试的时间
 type subscribedGroup struct {

@@ -3,8 +3,8 @@ import "message.proto";
 package protocol;
 enum Server2ClientKey
 {
-  Success       = 0;       //成功
-  Error        = 1;         //失败
+  Success = 0;
+  Error = 1;
   TopicExisted = 2;
   TopicNotExisted = 3;
   ChangeConsumerPartition = 4;

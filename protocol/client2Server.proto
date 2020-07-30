@@ -4,10 +4,10 @@ package protocol;
 
 enum Client2ServerKey
 {
-  CreatTopic       = 0;
-  GetPublisherPartition       = 1;
-  Publish     = 2;
-  GetConsumerPartition       = 3;
+  CreatTopic = 0;
+  GetPublisherPartition  = 1;
+  Publish = 2;
+  GetConsumerPartition = 3;
   SubscribePartion = 4;
   SubscribeTopic = 5;
   RegisterConsumer = 6;

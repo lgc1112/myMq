@@ -126,7 +126,6 @@ func (g *group)notifyClients()  {
 			Partitions: g.client2PartitionMap[client.id],
 		}
 		client.writeCmdChan <- response
-		//client.sendResponse(response)
 	}
 	g.clientsLock.Unlock()
 }
