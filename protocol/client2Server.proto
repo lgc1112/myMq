@@ -40,8 +40,24 @@ message CreatTopicResponse{
   enum ResponseKey
   {
       TopicExisted = 0;
-      CreateSuccess = 1;
-      CreateError = 2;
+      Success = 1;
+      Error = 2;
   };
   ResponseKey key = 1;
+}
+
+message GetPublisherPartitionsRequest{
+  string Topic = 1;
+}
+
+message GetPublisherPartitionsResponse{
+  enum ResponseKey
+  {
+    TopicNotExisted = 0;
+    Success = 1;
+    Error = 2;
+    ReturnPartitions = 3;
+  };
+  ResponseKey key = 1;
+  repeated Partition Partitions = 2;
 }

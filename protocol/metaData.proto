@@ -1,0 +1,17 @@
+syntax = "proto3";
+import "message.proto";
+package protocol;
+message MetaData{
+  repeated Topic topics = 1;
+  repeated Group groups = 2;
+}
+
+message Topic{
+  string name = 1;
+  repeated Partition partitions = 2;
+}
+
+message Group{
+  string name = 1;
+  repeated string subscribedTopics = 2;
+}

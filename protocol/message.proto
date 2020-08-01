@@ -16,3 +16,8 @@ message InternalMessage{
   int32 tryTimes = 5;
   int64 timeout = 6;
 }
+
+message Partition {
+  string name = 1;
+  string addr = 2;
+}

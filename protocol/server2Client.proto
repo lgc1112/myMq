@@ -24,10 +24,7 @@ message Server2Client {
   int32 RebalanceId = 7;
 }
 
-message Partition {
-  string name = 1;
-  string addr = 2;
-}
+
 
 
 

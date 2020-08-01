@@ -17,7 +17,7 @@ type group struct {
 	clientsLock sync.RWMutex
 	clients []*client
 	client2PartitionMapLock sync.RWMutex
-	client2PartitionMap map[int64] []*protocol.Partition
+	client2PartitionMap map[int64] []*protocol.Partition //每个client被分配到的分区，clientId -> Partition
 }
 
 func newGroup(name string) *group {
@@ -26,6 +26,7 @@ func newGroup(name string) *group {
 		client2PartitionMap: make(map[int64] []*protocol.Partition),
 	}
 }
+
 func (g *group)getClientPartition(clientId int64)  []*protocol.Partition{
 	g.clientsLock.RLock()
 	if containClient(g.clients, clientId){
@@ -36,6 +37,16 @@ func (g *group)getClientPartition(clientId int64)  []*protocol.Partition{
 	g.clientsLock.RUnlock()
 	myLogger.Logger.Print("get Client not exist")
 	return nil
+}
+
+func (g *group)getSubscribedTopics() []string{
+	var topics []string
+	g.subscribedTopicsLock.RLock()
+	for _, topic := range g.subscribedTopics {
+		topics = append(topics, topic.name)
+	}
+	g.subscribedTopicsLock.RUnlock()
+	return topics
 }
 
 func (g *group)addClient(client *client)  bool{
@@ -160,7 +171,7 @@ func (g *group)rebalance(){
 		for _, partition := range topic.partitionMap {
 			clientId := g.clients[k % clientNum].id
 			k++
-			tmpMap[clientId] = append(tmpMap[clientId], &protocol.Partition{Name: partition.name, TopicName: topic.name, Addr: partition.addr})
+			tmpMap[clientId] = append(tmpMap[clientId], &protocol.Partition{Name: partition.name, Addr: partition.addr})
  		}
 	}
 	g.subscribedTopicsLock.RUnlock()

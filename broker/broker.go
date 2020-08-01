@@ -5,12 +5,17 @@ import (
 	"../protocol"
 	"flag"
 	"fmt"
+	"github.com/golang/protobuf/proto"
 	"net"
 	"os"
 	"sync"
 )
+const logDir string = "./broker/log/"
+const openCluster bool = true
 
 type Broker struct {
+	isController bool
+
 	maxClientId int64
 	addr string
 	tcpServer     *tcpServer
@@ -37,6 +42,8 @@ type Broker struct {
 	//exitChan chan string
 
 	needExit bool
+
+	etcdClient *etcdClient
 }
 type clientChange struct {
 	isAdd bool
@@ -49,7 +56,7 @@ type readData struct {
 	client2serverData *protocol.Client2Server
 }
 
-const logDir string = "./broker/log/"
+
 func New(exitSignal chan os.Signal) (*Broker, error) {
 	addr := flag.String("addr", "0.0.0.0:12345", "ip:port")
 	flag.Parse() //解析参数
@@ -75,7 +82,9 @@ func New(exitSignal chan os.Signal) (*Broker, error) {
 
 	tcpServer := newTcpServer(broker, *addr)
 	broker.tcpServer = tcpServer
-
+	if openCluster{
+		broker.etcdClient, err = NewEtcdClient(broker)
+	}
 	return broker, err
 
 }
@@ -95,6 +104,45 @@ func getIntranetIp() string{
 		}
 	}
 	return "0.0.0.0"
+}
+func (b *Broker)retrieveMetaData(){
+	metaData := &protocol.MetaData{}
+	var data []byte
+	err := proto.Unmarshal(data, metaData)
+	if err != nil {
+		myLogger.Logger.Print("Unmarshal error %s", err)
+		return
+	}
+
+}
+func (b *Broker)persistMetaData(){
+	metaData := &protocol.MetaData{}
+	for topicName, topic := range b.topicMap{
+		t := &protocol.Topic{
+			Name: topicName,
+			Partitions: topic.getPartitions(),
+		}
+		metaData.Topics = append(metaData.Topics, t)
+	}
+	for groupName, group := range b.groupMap{
+		g := &protocol.Group{
+			Name: groupName,
+			SubscribedTopics:group.getSubscribedTopics(),
+		}
+		metaData.Groups = append(metaData.Groups, g)
+	}
+	data, err := proto.Marshal(metaData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error: ", err)
+		return
+	}
+	myLogger.Logger.Print(metaData)
+	err = b.etcdClient.PutMetaData(string(data))
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error: ", err)
+		return
+	}
+	return
 }
 func (b *Broker) Run() error {
 	//监听指定退出信号 ctrl+c kill
@@ -193,9 +241,9 @@ func (b *Broker) closeClients()  {
 	}
 
 	for _, client := range b.clientMap {
-		client.isbrokerExitLock1.Lock()
+		//client.isbrokerExitLock1.Lock()
 		client.isbrokerExit = true //标志退出了
-		client.isbrokerExitLock1.Unlock()
+		//client.isbrokerExitLock1.Unlock()
 		err := client.conn.Close() //关闭所有conn，从而关闭所有client协程
 		if err != nil{
 			myLogger.Logger.PrintError("client close err:", err)
@@ -205,7 +253,7 @@ func (b *Broker) closeClients()  {
 	//myLogger.Logger.PrintDebug("remove broker Client success, remain len:", len(b.clientMap))
 	//myLogger.Logger.Print("close broker Client success, remain len:", len(b.clientMap))
 }
-func (b *Broker)  exit()  {
+func (b *Broker) exit()  {
 	b.partitionMapLock.RLock()
 	for _, partition := range b.partitionMap {
 		partition.exit()
@@ -213,7 +261,22 @@ func (b *Broker)  exit()  {
 		//<- partition.exitFinishedChan
 	}
 	b.partitionMapLock.RUnlock()
+
+	if openCluster && b.isController{
+		b.persistMetaData()
+	}
 }
+
+func (b *Broker) BecameController()  {
+	b.isController = true
+	myLogger.Logger.Print("BecameController")
+}
+
+func (b *Broker) BecameNormalBroker()  {
+	b.isController = false
+	myLogger.Logger.Print("BecameNormalBroker")
+}
+
 func (b *Broker) ReadLoop() {
 	var data *readData
 	for{

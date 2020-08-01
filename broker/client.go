@@ -27,7 +27,7 @@ type client struct {
 	exitChan chan string
 	readyNum int32 //客户端目前可接受的数据量
 	changeReadyNum chan int32 //使得readyNum只在writeLoop协程中修改
-	isbrokerExitLock1 sync.RWMutex
+	//isbrokerExitLock1 sync.RWMutex
 	isbrokerExit bool
 }
 
@@ -78,7 +78,7 @@ func (c *client)forceExit() {
 
 }
 func (c *client)clientExit() {
-	c.isbrokerExitLock1.RLock()
+	//c.isbrokerExitLock1.RLock()
 	if c.isbrokerExit{//如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
 		myLogger.Logger.Print("exit client isbrokerExit:", c.id)
 		waitFinished := make(chan bool)
@@ -89,10 +89,10 @@ func (c *client)clientExit() {
 		close(c.writeCmdChan)
 		close(c.changeReadyNum)
 		close(c.exitChan)
-		c.isbrokerExitLock1.RUnlock()
+		//c.isbrokerExitLock1.RUnlock()
 		return
 	}
-	c.isbrokerExitLock1.RUnlock()
+	//c.isbrokerExitLock1.RUnlock()
 
 
 	myLogger.Logger.Print("exit client :", c.id)
@@ -108,11 +108,11 @@ func (c *client)clientExit() {
 		myLogger.Logger.Printf("exit client belong to group : %s", c.belongGroup)
 		succ:= group.deleteClient(c.id) //从group中删除
 		if succ {
-			c.isbrokerExitLock1.RLock()
+			//c.isbrokerExitLock1.RLock()
 			if !c.isbrokerExit { //如果是broker退出了不用做负载均衡操作。
 				group.rebalance()
 			}
-			c.isbrokerExitLock1.RUnlock()
+			//c.isbrokerExitLock1.RUnlock()
 		}
 	}
 
@@ -129,11 +129,11 @@ func (c *client)clientExit() {
 	}
 	c.broker.partitionMapLock.RUnlock()
 
-	c.isbrokerExitLock1.RLock()
+	//c.isbrokerExitLock1.RLock()
 	if !c.isbrokerExit { //如果是broker退出了说明conn已经关闭了
 		c.conn.Close()
 	}
-	c.isbrokerExitLock1.RUnlock()
+	//c.isbrokerExitLock1.RUnlock()
 	close(c.writeMsgChan)
 	close(c.writeCmdChan)
 	close(c.changeReadyNum)
@@ -262,7 +262,7 @@ func (c *client)readLoop() {
 		client2ServerData := &protocol.Client2Server{}
 		err = proto.Unmarshal(requestData, client2ServerData)
 		if err != nil {
-			myLogger.Logger.Print("Unmarshal error %s", err)
+			myLogger.Logger.PrintError("Unmarshal error %s", err)
 		}else{
 			myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
 		}
