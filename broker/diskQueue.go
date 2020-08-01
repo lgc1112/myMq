@@ -49,7 +49,7 @@ func NewDiskQueue(path string) *diskQueue{
 	} else {
 		//fmt.Printf("mk log dir success!\n")
 	}
-	d.retrieveDiskData()//恢复磁盘中的数据
+	d.retrieveDiskMetaData()//恢复磁盘中的数据
 	go d.ioLoop()
 	return d
 }
@@ -167,7 +167,7 @@ func (d *diskQueue)readDiskMsg() ([]byte, error) {
 		d.wOffset = 0
 		d.rOffset = 0
 
-		d.persistDiskData() //删除前先同步，保存好偏移数据，已防止访问已删除的数据
+		d.persistDiskMetaData() //删除前先同步，保存好偏移数据，已防止访问已删除的数据
 		err := os.Remove(deleteFileName)
 		if err != nil {
 			myLogger.Logger.PrintError("Remove file Error", deleteFileName, err)
@@ -183,7 +183,7 @@ func (d *diskQueue)readDiskMsg() ([]byte, error) {
 			deleteFileName := d.fileName + strconv.FormatInt(d.rFileNum, 10)
 			d.rFileNum++
 			d.rOffset = 0
-			d.persistDiskData() //删除前先同步，保存好偏移数据，已防止访问已删除的数据
+			d.persistDiskMetaData() //删除前先同步，保存好偏移数据，已防止访问已删除的数据
 			err := os.Remove(deleteFileName)
 			if err != nil {
 				myLogger.Logger.PrintError("Remove file Error")
@@ -276,7 +276,7 @@ func (d *diskQueue) sync() error {
 		}
 	}
 
-	err := d.persistDiskData()
+	err := d.persistDiskMetaData()
 	if err != nil {
 		return err
 	}
@@ -285,7 +285,7 @@ func (d *diskQueue) sync() error {
 }
 
 
-func (d *diskQueue) retrieveDiskData() error {
+func (d *diskQueue) retrieveDiskMetaData() error {
 	f, err := os.OpenFile(d.fileName, os.O_RDONLY, os.ModePerm)
 	defer f.Close()
 	if err != nil {
@@ -314,7 +314,7 @@ func (d *diskQueue) retrieveDiskData() error {
 }
 
 
-func (d *diskQueue) persistDiskData() error {
+func (d *diskQueue) persistDiskMetaData() error {
 	f, err := os.OpenFile(d.fileName, os.O_RDWR|os.O_CREATE, os.ModePerm)
 	defer f.Close()
 	if err != nil {

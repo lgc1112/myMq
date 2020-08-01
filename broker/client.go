@@ -21,7 +21,7 @@ type client struct {
 	writer *bufio.Writer
 	broker *Broker
 	belongGroup string
-	consumePartions map[string] bool
+	consumePartions map[string] bool //该消费者消费的分区，key:分区名
 	writeCmdChan     chan *protocol.Server2Client
 	writeMsgChan     chan *protocol.Server2Client
 	exitChan chan string
@@ -74,6 +74,9 @@ func (c *client)clientHandle() {
 	myLogger.Logger.Print("a client leave2")
 }
 
+func (c *client)forceExit() {
+
+}
 func (c *client)clientExit() {
 	c.isbrokerExitLock1.RLock()
 	if c.isbrokerExit{//如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
@@ -100,7 +103,7 @@ func (c *client)clientExit() {
 	//从group中删除
 	group, ok := c.broker.getGroup(&c.belongGroup)
 	if !ok {
-		myLogger.Logger.Print("exit client do not belong to any group")
+		myLogger.Logger.Printf("exit client %d do not belong to any group", c.id)
 	}else{
 		myLogger.Logger.Printf("exit client belong to group : %s", c.belongGroup)
 		succ:= group.deleteClient(c.id) //从group中删除
@@ -353,9 +356,10 @@ func (c *client)  publish(client2ServerData *protocol.Client2Server)  (response 
 	}else{
 		myLogger.Logger.Printf("publish msg : %s", msg.String())
 		partition.msgChan <- msg
-		response = &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
-		}
+		response = <- partition.responseChan
+		//response = &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_Success,
+		//}
 		return response
 	}
 

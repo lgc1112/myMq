@@ -203,13 +203,14 @@ func (b *Broker) closeClients()  {
 	}
 
 	//myLogger.Logger.PrintDebug("remove broker Client success, remain len:", len(b.clientMap))
-	myLogger.Logger.Print("remove broker Client success, remain len:", len(b.clientMap))
+	//myLogger.Logger.Print("close broker Client success, remain len:", len(b.clientMap))
 }
 func (b *Broker)  exit()  {
 	b.partitionMapLock.RLock()
 	for _, partition := range b.partitionMap {
-		partition.exitChan <- "bye par"
-		<- partition.exitFinishedChan
+		partition.exit()
+		//partition.exitChan <- "bye par"
+		//<- partition.exitFinishedChan
 	}
 	b.partitionMapLock.RUnlock()
 }
@@ -294,17 +295,17 @@ func (b *Broker) ReadLoop() {
 func (b *Broker)  creatTopic(data *readData)  (response *protocol.Server2Client) {
 	request := data.client2serverData
 	topicName := request.Topic
-	partionNum := request.PartitionNum
+	partitionNum := request.PartitionNum
 	topic, ok := b.getTopic(&topicName)
 	if ok {
-		myLogger.Logger.Printf("try to create existed topic : %s %d", topicName, int(partionNum))
+		myLogger.Logger.Printf("try to create existed topic : %s %d", topicName, int(partitionNum))
 		response = &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_TopicExisted,
 			Partitions: topic.getPartitions(),
 		}
 	} else {
-		myLogger.Logger.Printf("create topic : %s %d", topicName, int(partionNum))
-		topic = newTopic(topicName, int(partionNum), b)
+		myLogger.Logger.Printf("create topic : %s %d", topicName, int(partitionNum))
+		topic = newTopic(topicName, int(partitionNum), b)
 		b.addTopic(&topicName, topic)
 		response = &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_SendPartions,
@@ -466,12 +467,16 @@ func (b *Broker)  subscribePartition(data *readData)   (response *protocol.Serve
 		}
 		return response
 	}else{
+		if partition.getGroupRebalanceId(groupName) > request.RebalanceId{//不是最新的，丢弃
+			myLogger.Logger.Printf("Reject subscribePartition oldId : %d newId: %d", partition.getGroupRebalanceId(groupName), request.RebalanceId)
+			return nil
+		}
 		clientConn, ok := b.getClient(data.clientID)
 		if !ok {
 			myLogger.Logger.Print("clientConn have close")
 		}
 		clientConn.consumePartions[partitionName] = true
-		partition.addComsummerClient(clientConn, groupName)
+		partition.addComsummerClient(clientConn, groupName, request.RebalanceId)
 		response = &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_Success,
 		}

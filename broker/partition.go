@@ -13,10 +13,12 @@ type partition struct {
 	subscribedGroupsLock sync.RWMutex
 	subscribedGroups map[string] *subscribedGroup //groupName -> *client
 	curMsgId int32
+	wg sync.WaitGroup
 
 	msgChan     chan *protocol.Message
+	responseChan chan *protocol.Server2Client
 	msgAskChan     chan *msgAskData
-	exitFinishedChan chan string
+	//exitFinishedChan chan string
 	exitChan chan string
 }
 
@@ -34,12 +36,18 @@ func newPartition(name, addr string)  *partition{
 		name : name,
 		addr : addr,
 		msgChan : make(chan *protocol.Message, msgChanSize),
+		responseChan: make(chan *protocol.Server2Client),
 		subscribedGroups: make(map[string] *subscribedGroup),
-		exitFinishedChan: make(chan string),
+		//exitFinishedChan: make(chan string),
 		msgAskChan: make(chan *msgAskData),
 		exitChan: make(chan string),
 	}
-	go partition.readLoop()
+	partition.wg.Add(1)
+	go func() {
+		partition.readLoop()
+		partition.wg.Done()
+	}()
+	//go partition.readLoop()
 	return partition
 }
 
@@ -60,6 +68,7 @@ func (p *partition) generateMsgId() int32{
 func (p *partition) readLoop()  {
 	var msg *protocol.Message
 	for{
+	OuterLoop:
 		select {
 		case <- p.exitChan:
 			goto exit
@@ -84,19 +93,38 @@ func (p *partition) readLoop()  {
 			//	Msg: msg,
 			//}
 			p.subscribedGroupsLock.RLock()
-			for grpName, subGrp := range p.subscribedGroups{
+			if msg.Priority > 0{//这是优先级消息，需先判断消息是否可保存的优先队列
+				for grpName, subGrp := range p.subscribedGroups{
+					if subGrp.priorityQueue.Len() > queueSize - 2{//写不下了，需拒绝这条消息
+						myLogger.Logger.Printf("group %s is full", grpName)
+						response := &protocol.Server2Client{
+							Key: protocol.Server2ClientKey_PriorityQueueFull,
+						}
+						p.responseChan <- response
+						goto OuterLoop
+					}
+				}
+			}
+			for grpName, subGrp := range p.subscribedGroups{ //可正常发送
 				myLogger.Logger.Printf("send msg to subscribedGroups %s", grpName)
 				subGrp.readChan <- internalMsg
 			}
+
+			response := &protocol.Server2Client{
+				Key: protocol.Server2ClientKey_PublishSuccess,
+			}
+			p.responseChan <- response
 			p.subscribedGroupsLock.RUnlock()
 		}
 	}
 exit:
 	myLogger.Logger.Printf("Partition %s exiting", p.name)
-	p.exit()
+	//p.exit()
 }
 
 func (p *partition) exit(){
+	p.exitChan <- "bye"
+	p.wg.Wait() //等待正常关闭
 	p.subscribedGroupsLock.Lock()
 	for _, subscribedGroup:= range p.subscribedGroups{
 		subscribedGroup.exit()
@@ -104,13 +132,31 @@ func (p *partition) exit(){
 	}
 	myLogger.Logger.Printf("Partition %s exit finished", p.name)
 	p.subscribedGroupsLock.Unlock()
-	p.exitFinishedChan <- "bb"
+	//p.exitFinishedChan <- "bb"
 	close(p.msgChan)
 	close(p.msgAskChan)
 	close(p.exitChan)
 }
 
-func (p *partition) addComsummerClient(client *client, groupName string) {
+func (p *partition) getGroupRebalanceId( groupName string) int32{
+	myLogger.Logger.Printf("partition %s  addComsummerClient : %s", p.name, groupName)
+	p.subscribedGroupsLock.RLock()
+	defer p.subscribedGroupsLock.RUnlock()
+	subscribedGroup, ok:= p.subscribedGroups[groupName]
+
+	if !ok {
+		return 0
+	}else{
+		myLogger.Logger.Printf("getGroupRebalanceId : %s",  subscribedGroup.rebalanceId)
+		return subscribedGroup.rebalanceId
+	}
+
+	//subscribedGroup.consumerClientLock.Lock()
+	//subscribedGroup.consumerClient = client
+	//subscribedGroup.consumerClientLock.Unlock()
+}
+
+func (p *partition) addComsummerClient(client *client, groupName string, rebalanceId int32) {
 	myLogger.Logger.Printf("partition %s  addComsummerClient : %s", p.name, groupName)
 	p.subscribedGroupsLock.Lock()
 	subscribedGroup, ok:= p.subscribedGroups[groupName]
@@ -119,7 +165,7 @@ func (p *partition) addComsummerClient(client *client, groupName string) {
 		subscribedGroup = newPartionGroup(groupName, p.name)
 		p.subscribedGroups[groupName] = subscribedGroup
 	}
-
+	subscribedGroup.rebalanceId = rebalanceId
 	waitFinished := make(chan bool)
 
 	subscribedGroup.clientChangeChan <- &clientChange{true, client, waitFinished}//放到partitiongroup的readLoop协程中进行处理，避免频繁使用锁

@@ -40,8 +40,6 @@ func main() {
 		}
 		if i == 0{
 			p.CreatTopic("fff", partitionNum)
-		}else{
-			p.GetTopicPartition("fff")
 		}
 		wg.Add(1)
 		go func() {
@@ -80,7 +78,7 @@ func producerHandle(p *producer.Producer)  int64{
 		default:
 			s := fmt.Sprintf("hello : %d", i)
 			i++
-			//time.Sleep(1*time.Second)
+			time.Sleep(1*time.Second)
 			err := p.Pubilsh("fff", []byte(s), 0)
 			if err != nil {
 				fmt.Println(err)

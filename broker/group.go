@@ -4,11 +4,14 @@ import (
 	"sync"
 	"../mylib/myLogger"
 	"../protocol"
+	"sync/atomic"
+	"time"
 )
 
 type group struct {
 	name string
 	sync.RWMutex
+	rebalanceID int32//用于判断是不是最新的修改
 	subscribedTopicsLock sync.RWMutex
 	subscribedTopics [] *topic
 	clientsLock sync.RWMutex
@@ -41,6 +44,7 @@ func (g *group)addClient(client *client)  bool{
 	if containClient(g.clients, client.id){
 		myLogger.Logger.Print("addClient exist")
 		//g.clientsLock.RUnlock()
+		g.clientsLock.Unlock()
 		return false
 	}
 	//g.clientsLock.RUnlock()
@@ -59,9 +63,12 @@ func containClient(items []*client, item int64) bool {
 }
 
 func (g *group) deleteClient(clientId int64) (succ bool){
+	myLogger.Logger.Print("deleteClient...")
+
 	g.clientsLock.Lock()
 	if !containClient(g.clients, clientId){
 		myLogger.Logger.Print("deleteClient not exist")
+		g.clientsLock.Unlock()
 		return false
 	}
 	j := 0
@@ -120,14 +127,23 @@ func (g *group)deleteTopic(topic *topic)  {
 func (g *group)notifyClients()  {
 	myLogger.Logger.Print("notifyClients ")
 	g.clientsLock.Lock()
+	defer g.clientsLock.Unlock()
 	for _, client := range g.clients{
 		response := &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_ChangeConsumerPartition,
 			Partitions: g.client2PartitionMap[client.id],
+			RebalanceId: g.rebalanceID,
 		}
-		client.writeCmdChan <- response
+		select {
+		case client.writeCmdChan <- response:
+			//myLogger.Logger.Print("do not have client")
+		case <-time.After(100 * time.Microsecond):
+			myLogger.Logger.PrintWarning("notifyClient fail")
+			return
+		}
+
 	}
-	g.clientsLock.Unlock()
+	myLogger.Logger.Print("notifyClients end")
 }
 
 func (g *group)rebalance(){
@@ -139,6 +155,7 @@ func (g *group)rebalance(){
 		return
 	}
 	tmpMap:= make(map[int64] []*protocol.Partition)
+	g.subscribedTopicsLock.RLock()
 	for _, topic := range g.subscribedTopics {
 		for _, partition := range topic.partitionMap {
 			clientId := g.clients[k % clientNum].id
@@ -146,6 +163,8 @@ func (g *group)rebalance(){
 			tmpMap[clientId] = append(tmpMap[clientId], &protocol.Partition{Name: partition.name, TopicName: topic.name, Addr: partition.addr})
  		}
 	}
+	g.subscribedTopicsLock.RUnlock()
 	g.client2PartitionMap = tmpMap
+	atomic.AddInt32(&g.rebalanceID, 1)//更新id
 	g.notifyClients()
 }

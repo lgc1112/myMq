@@ -11,6 +11,7 @@ enum Server2ClientKey
   PushMsg = 5;
   PublishSuccess = 6;
   SendPartions = 7;
+  PriorityQueueFull = 8;
 };
 
 message Server2Client {
@@ -20,11 +21,13 @@ message Server2Client {
   string MsgPartitionName = 4;
   string MsgGroupName = 5;
   string Topic = 6;
+  int32 RebalanceId = 7;
 }
 
 message Partition {
   string name = 1;
-  string topicName = 2;
-  string addr = 3;
+  string addr = 2;
 }
+
+
 

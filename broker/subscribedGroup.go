@@ -3,6 +3,7 @@ package broker
 import (
 	"../mylib/myLogger"
 	"../protocol"
+	"container/heap"
 	"container/list"
 	"errors"
 	"github.com/golang/protobuf/proto"
@@ -16,11 +17,13 @@ const MaxTryTime = 10 //最多重试的时间
 type subscribedGroup struct {
 	name string
 	partitionName string
+	rebalanceId int32
 	wg sync.WaitGroup
 	//consumerClientLock sync.RWMutex
 	consumerClient *client //限制在IOloop进程中修改，不加锁
-	circleQueue1 *circleQueue
-	circleQueue2 *circleQueue //高优先级队列
+	circleQueue *circleQueue
+	//circleQueue2 *circleQueue //高优先级队列
+	priorityQueue *priorityQueue //高优先级队列
 	inflightQueue *list.List //链表
 
 	inFlightMsgMap map[int32] *list.Element
@@ -34,7 +37,7 @@ type subscribedGroup struct {
 	//exitFinishedChan chan string
 	msgAskChan     chan int32
 	diskQueue1 *diskQueue
-	diskQueue2 *diskQueue
+	//diskQueue2 *diskQueue
 }
 
 
@@ -47,13 +50,13 @@ func newPartionGroup(name, partitionName string) *subscribedGroup  {
 		readLoopExitChan: make(chan string),
 		writeLoopExitChan: make(chan string),
 		inFlightMsgMap: make(map[int32] *list.Element),
-		circleQueue1: NewCircleQueue(queueSize + 2),//开大两个字节，队列满关闭时才可以多存储内存中的两个数据
-		circleQueue2: NewCircleQueue(queueSize + 2),
+		circleQueue: NewCircleQueue(queueSize + 2),//开大两个字节，队列满关闭时才可以多存储内存中的两个数据
+		priorityQueue: NewPriorityQueue(queueSize + 2),
 		inflightQueue: list.New(),
 		partitionName: partitionName,
 		name: name,
-		diskQueue1: NewDiskQueue("./data/" + partitionName + "/" + name + "-p1/"),
-		diskQueue2: NewDiskQueue("./data/" + partitionName + "/" + name + "-p2/"),
+		diskQueue1: NewDiskQueue("./data/" + partitionName + "/" + name + "/"),
+		//diskQueue2: NewDiskQueue("./data/" + partitionName + "/" + name + "-p2/"),
 	}
 	g.wg.Add(2)
 	go func() {
@@ -91,9 +94,9 @@ func (g *subscribedGroup) exit(){
 		}
 		myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", inflightMes, g.diskQueue1.msgNum)
 	}
-	for g.circleQueue1.Len() > 0{ //把优先级队列1的数据全部存入磁盘
+	for g.circleQueue.Len() > 0{ //把优先级队列1的数据全部存入磁盘
 		myLogger.Logger.Print("read Data from priorityQueue")
-		circleQueue2Data, _ := g.circleQueue1.Pop()
+		circleQueue2Data, _ := g.circleQueue.Pop()
 		data, err := proto.Marshal(circleQueue2Data)
 		if err != nil{
 			myLogger.Logger.PrintError("Marshal :", err)
@@ -105,18 +108,19 @@ func (g *subscribedGroup) exit(){
 		myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", circleQueue2Data, g.diskQueue1.msgNum)
 	}
 
-	for g.circleQueue2.Len() > 0{ //把优先级队列2的数据全部存入磁盘
+	for g.priorityQueue.Len() > 0{ //把优先级队列的数据全部存入磁盘
 		myLogger.Logger.Print("read Data from priorityQueue")
-		circleQueue2Data, _ := g.circleQueue2.Pop()
-		data, err := proto.Marshal(circleQueue2Data)
+		priorityQueueData := heap.Pop(g.priorityQueue).(*protocol.InternalMessage)
+		data, err := proto.Marshal(priorityQueueData)
+
 		if err != nil{
 			myLogger.Logger.PrintError("Marshal :", err)
 		}
-		err = g.diskQueue2.storeData(data)
+		err = g.diskQueue1.storeData(data)
 		if err != nil{
 			myLogger.Logger.PrintError("storeData :", err)
 		}
-		myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", circleQueue2Data, g.diskQueue2.msgNum)
+		myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", priorityQueueData, g.diskQueue1.msgNum)
 	}
 
 
@@ -124,10 +128,6 @@ func (g *subscribedGroup) exit(){
 	err := g.diskQueue1.sync()
 	if err != nil{
 		myLogger.Logger.PrintError("persistDiskData1 :", err)
-	}
-	err = g.diskQueue2.sync()
-	if err != nil{
-		myLogger.Logger.PrintError("persistDiskData2 :", err)
 	}
 	myLogger.Logger.Print("subscribedGroup exit finished")
 	//g.exitFinishedChan <- "bye "
@@ -276,49 +276,35 @@ func (g *subscribedGroup) readLoop()  {
 	var msg *protocol.InternalMessage
 	var memPreparedMsgChan chan *protocol.InternalMessage
 	//var diskPreparedMsgChan chan *protocol.InternalMessage
-	var diskReadyChan1 chan []byte
-	var diskReadyChan2 chan []byte
+	var diskReadyChan chan []byte
 	var memReadyData *protocol.InternalMessage
-	var diskReadyData1 *protocol.InternalMessage
-	var diskReadyData2 *protocol.InternalMessage
+	var diskReadyData *protocol.InternalMessage
+	//var diskReadyData2 *protocol.InternalMessage
 	//var haveProcessPreparedData bool = true
 	for{
 
 		//负责读disk1中的消息到circleQueue1
-		if diskReadyData1 == nil{ //准备好的数据为空
-			diskReadyChan1 = g.diskQueue1.readyChan //可从磁盘读数据
+		if diskReadyData == nil{ //准备好的数据为空
+			diskReadyChan = g.diskQueue1.readyChan //可从磁盘读数据
 		}else{//磁盘数据准备好了
-			if g.circleQueue1.Len() < queueSize{//放到内存队列
-				g.circleQueue1.Push(diskReadyData1) //放到队列末尾
-				myLogger.Logger.Printf("push Msg %s to circleQueue, present Len: %d", diskReadyData1, g.circleQueue1.Len())
-				diskReadyData1 = nil//清空
-				diskReadyChan1 = g.diskQueue1.readyChan //可从磁盘读新数据
+			if g.circleQueue.Len() < queueSize{//放到内存队列
+				g.circleQueue.Push(diskReadyData) //放到队列末尾
+				myLogger.Logger.Printf("push Msg %s to circleQueue, present Len: %d", diskReadyData, g.circleQueue.Len())
+				diskReadyData = nil//清空
+				diskReadyChan = g.diskQueue1.readyChan //可从磁盘读新数据
 			}else{
-				diskReadyChan1 = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
-			}
-		}
-
-		//负责读disk2中的消息到circleQueue2
-		if diskReadyData2 == nil{ //准备好的数据为空
-			diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读数据
-		}else{//磁盘数据准备好了
-			if g.circleQueue2.Len() < queueSize{//放到内存队列
-				g.circleQueue2.Push(diskReadyData2) //放到队列末尾
-				diskReadyData2 = nil//清空
-				diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读新数据
-				myLogger.Logger.Printf("push Msg %s to circleQueue, present Len: %d", msg, g.circleQueue1.Len())
-			}else{
-				diskReadyChan2 = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
+				diskReadyChan = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
 			}
 		}
 
 		//读取内存中的消息，准备发送
-		if memReadyData == nil && g.circleQueue2.Len() > 0{//优先队列中有数据必须先发完优先队列中的
-			myLogger.Logger.Print("read Data from circleQueue2")
-			memReadyData, _ = g.circleQueue2.Pop()
-		}else if memReadyData == nil && g.circleQueue1.Len() > 0{ //只有优先队列中没有数据，才往这里读数据
+		if memReadyData == nil && g.priorityQueue.Len() > 0{//优先队列中有数据必须先发完优先队列中的
+			myLogger.Logger.Print("read Data from priorityQueue")
+			memReadyData = heap.Pop(g.priorityQueue).(*protocol.InternalMessage)
+			//memReadyData, _ = g.circleQueue2.Pop()
+		}else if memReadyData == nil && g.circleQueue.Len() > 0{ //只有优先队列中没有数据，才往这里读数据
 			myLogger.Logger.Print("read Data from circleQueue1")
-			memReadyData, _ = g.circleQueue1.Pop()
+			memReadyData, _ = g.circleQueue.Pop()
 		}
 		if memReadyData == nil{
 			memPreparedMsgChan = nil //内存无数据可发，设为nil使其阻塞
@@ -327,36 +313,24 @@ func (g *subscribedGroup) readLoop()  {
 		}
 
 		select {
-		case <- g.readLoopExitChan: //要退出了，保存好这3个内存中的数据，防止丢失
-			if diskReadyData1 != nil{
-				g.circleQueue1.Push(diskReadyData1)//保证队列满存储也不出问题
-			}
-			if diskReadyData2 != nil{
-				g.circleQueue2.Push(diskReadyData2)
+		case <- g.readLoopExitChan: //要退出了，保存好这2个内存中的数据，防止丢失
+			if diskReadyData != nil{
+				g.circleQueue.Push(diskReadyData)//保证队列满存储也不出问题
 			}
 			if memReadyData != nil{ //
-				g.circleQueue1.Push(memReadyData) //保证队列满存储也不出问题
+				g.circleQueue.Push(memReadyData) //保证队列满存储也不出问题
 			}
 			goto exit
-		case bytes := <- diskReadyChan1: //1有磁盘数据可读
-			if diskReadyData1 != nil {
+		case bytes := <- diskReadyChan: //1有磁盘数据可读
+			if diskReadyData != nil {
 				myLogger.Logger.PrintError("Should not come here")
 			}
-			diskReadyData1 = &protocol.InternalMessage{}
-			err := proto.Unmarshal(bytes, diskReadyData1)
+			diskReadyData = &protocol.InternalMessage{}
+			err := proto.Unmarshal(bytes, diskReadyData)
 			if err != nil{
 				myLogger.Logger.PrintError("Unmarshal :", err)
 			}
 
-		case bytes := <- diskReadyChan2: //2有磁盘数据可读
-			if diskReadyData2 != nil {
-				myLogger.Logger.PrintError("Should not come here")
-			}
-			diskReadyData2 = &protocol.InternalMessage{}
-			err := proto.Unmarshal(bytes, diskReadyData2)
-			if err != nil{
-				myLogger.Logger.PrintError("Unmarshal :", err)
-			}
 		case memPreparedMsgChan <- memReadyData:
 			if memReadyData == nil {
 				myLogger.Logger.PrintError("Should not come here")
@@ -364,11 +338,11 @@ func (g *subscribedGroup) readLoop()  {
 			memReadyData = nil
 		case msg = <-g.readChan://新数据到了
 			msg.TryTimes++ //重试次数加一
-			if msg.Priority == 0{
-				if g.circleQueue1.Len() < queueSize{// && g.diskQueue1.msgNum == 0，只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
-					g.circleQueue1.Push(msg)
+			if msg.Priority == 0{ //普通消息
+				if g.circleQueue.Len() < queueSize{// && g.diskQueue1.msgNum == 0，只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
+					g.circleQueue.Push(msg)
 					//heap.Push(g.priorityQueue, msg)
-					myLogger.Logger.Printf("push Msg %s to circleQueue1, present Len: %d", msg, g.circleQueue1.Len())
+					myLogger.Logger.Printf("push Msg %s to circleQueue1, present Len: %d", msg, g.circleQueue.Len())
 				}else{//存磁盘
 					data, err := proto.Marshal(msg)
 					if err != nil{
@@ -381,20 +355,11 @@ func (g *subscribedGroup) readLoop()  {
 					myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", msg, g.diskQueue1.msgNum)
 				}
 			}else{//高优先级
-				if g.circleQueue2.Len() < queueSize{// && g.diskQueue2.msgNum == 0，只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
-					g.circleQueue2.Push(msg)
-					//heap.Push(g.priorityQueue, msg)
-					myLogger.Logger.Printf("push Msg %s to circleQueue2, present Len: %d", msg, g.circleQueue2.Len())
-				}else{//存磁盘
-					data, err := proto.Marshal(msg)
-					if err != nil{
-						myLogger.Logger.PrintError("Marshal :", err)
-					}
-					err = g.diskQueue2.storeData(data)
-					if err != nil{
-						myLogger.Logger.PrintError("storeData :", err)
-					}
-					myLogger.Logger.Printf("push Msg %s to diskQueue2, present Len: %d", msg, g.diskQueue2.msgNum)
+				if g.priorityQueue.Len() < queueSize { //存优先级队列
+					heap.Push(g.priorityQueue, msg)
+					myLogger.Logger.Printf("push Msg %s to priorityQueue, present Len: %d", msg, g.priorityQueue.Len())
+				}else{
+					myLogger.Logger.PrintError("should not come here")
 				}
 			}
 

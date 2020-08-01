@@ -43,12 +43,12 @@ func main() {
 		myHandle := myHandle{i, 0}
 		wg.Add(1)
 		go consumer.ReadLoop(myHandle)
-		time.Sleep(1000 * time.Millisecond)
+		//time.Sleep(100 * time.Millisecond)
 		myLogger.Logger.PrintDebug("NewConsumer:", i)
 	}
 	myLogger.Logger.PrintDebug("NewConsumer finished:")
 	//wg.Wait()
-	timeTicker := time.NewTicker(testTime)
+	timeTicker := time.NewTicker(testTime)//测试开始
 	atomic.StoreInt32(&sum, 0)
 
 

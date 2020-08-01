@@ -240,18 +240,19 @@ func (c *Consumer) processMsg(data *protocol.Server2Client) (*protocol.Client2Se
 func (c *Consumer) changeConsumerPartition(data *protocol.Server2Client) (*protocol.Client2Server){
 	myLogger.Logger.Print("changeConsumerPartition:", data.Partitions)
 	c.partitions = data.Partitions
-	c.subscribePartion()
+	c.subscribePartion(data.RebalanceId)
 	return nil
 }
 
-func (c *Consumer) subscribePartion(){
+func (c *Consumer) subscribePartion(rebalanceId int32){
 	myLogger.Logger.Print("subscribePartion len:", len(c.partitions))
 	for _, partition := range c.partitions{
 		requestData := &protocol.Client2Server{
 			Key: protocol.Client2ServerKey_SubscribePartion,
-			Topic: partition.TopicName,
+			//Topic: partition.TopicName,
 			Partition: partition.Name,
 			GroupName: c.groupName,
+			RebalanceId: rebalanceId,
 		}
 		conn, ok := c.getBrokerConn(&partition.Addr)
 		if ok {
