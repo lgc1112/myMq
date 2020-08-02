@@ -16,8 +16,8 @@ type producerConn struct {
 	reader *bufio.Reader
 	writer *bufio.Writer
 	conn net.Conn
-	writeChan     chan *protocol.Client2Server
-	exitChan chan string
+	//writeChan     chan *protocol.Client2Server
+	//exitChan chan string
 }
 
 func newConn(addr string, producer *Producer)  (*producerConn, error){
@@ -68,7 +68,29 @@ func (p *producerConn)readResponse() (*protocol.Server2Client, error){
 	}
 	myLogger.Logger.Printf("receive response Key:%s : %s", response.Key, response)
 	return response, nil
+}
 
+func (p *producerConn)Write(data []byte) (error){
+
+	var buf [4]byte
+	bufs := buf[:]
+	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+	_, err := p.writer.Write(bufs)
+	if err != nil {
+		myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
+	_, err = p.writer.Write(data)
+	if err != nil {
+		myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
+	err = p.writer.Flush()
+	if err != nil {
+		myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
+	return nil
 }
 //func (p *producerConn)Handle() {
 //	var wg sync.WaitGroup

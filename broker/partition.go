@@ -20,6 +20,8 @@ type partition struct {
 	msgAskChan     chan *msgAskData
 	//exitFinishedChan chan string
 	exitChan chan string
+
+	isNativePartition bool //判断该分区是否在本地broker中
 }
 
 const (
@@ -30,11 +32,22 @@ type msgAskData struct {
 	msgId int32
 	groupName string
 }
-func newPartition(name, addr string)  *partition{
+func newPartition(name string, addr string, isNativePartiton bool)  *partition{
+	if !isNativePartiton{ //不是本地的分区
+		partition := &partition{
+			name : name,
+			addr : addr,
+			isNativePartition:isNativePartiton,
+		}
+		return partition
+	}
+
+
 	myLogger.Logger.Printf("newPartition %s : %s", name, addr)
 	partition := &partition{
 		name : name,
 		addr : addr,
+		isNativePartition:isNativePartiton,
 		msgChan : make(chan *protocol.Message, msgChanSize),
 		responseChan: make(chan *protocol.Server2Client),
 		subscribedGroups: make(map[string] *subscribedGroup),
@@ -49,6 +62,15 @@ func newPartition(name, addr string)  *partition{
 	}()
 	//go partition.readLoop()
 	return partition
+}
+func (p *partition) Put(msg *protocol.Message) *protocol.Server2Client{
+	if !p.isNativePartition {
+		myLogger.Logger.PrintWarning("try to put msg to not native partition")
+		return nil
+	}
+	p.msgChan <- msg
+	response := <- p.responseChan
+	return response
 }
 
 func (p *partition) generateMsgId() int32{
@@ -123,6 +145,9 @@ exit:
 }
 
 func (p *partition) exit(){
+	if !p.isNativePartition{ //不是本地的分区
+		return
+	}
 	p.exitChan <- "bye"
 	p.wg.Wait() //等待正常关闭
 	p.subscribedGroupsLock.Lock()
@@ -154,6 +179,21 @@ func (p *partition) getGroupRebalanceId( groupName string) int32{
 	//subscribedGroup.consumerClientLock.Lock()
 	//subscribedGroup.consumerClient = client
 	//subscribedGroup.consumerClientLock.Unlock()
+}
+
+func (p *partition) addComsummerGroup(groupName string) {
+	myLogger.Logger.Printf("partition %s  addComsummerClient : %s", p.name, groupName)
+	p.subscribedGroupsLock.Lock()
+	subscribedGroup, ok:= p.subscribedGroups[groupName]
+
+	if !ok {
+		subscribedGroup = newPartionGroup(groupName, p.name)
+		p.subscribedGroups[groupName] = subscribedGroup
+	}
+	p.subscribedGroupsLock.Unlock()
+
+	myLogger.Logger.Printf("addComsummerGroup : %s", groupName)
+
 }
 
 func (p *partition) addComsummerClient(client *client, groupName string, rebalanceId int32) {

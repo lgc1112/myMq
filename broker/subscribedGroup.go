@@ -195,7 +195,7 @@ func (g *subscribedGroup) writeLoop()  {
 				}
 				myLogger.Logger.Print("add group Client success")
 			}else{//删除client
-				if g.consumerClient != nil && g.consumerClient.id == tmp.client.id{ //id不等的话是因为已被替换了,不用处理
+				if g.consumerClient != nil{ // && g.consumerClient.id == tmp.client.id id不等的话是因为已被替换了,不用处理
 					g.consumerClient = nil
 					preparedMsgChan = nil
 					curConsumerChan = nil //没有消费者了，让其阻塞

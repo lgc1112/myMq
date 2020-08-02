@@ -9,10 +9,8 @@ import (
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 )
 const defaultreadyNum = 1000
-var Logger *myLogger.MyLogger
 type client struct {
 	id int64
 	conn net.Conn
@@ -33,7 +31,7 @@ type client struct {
 
 func newClient(conn net.Conn, broker *Broker)  *client{
 	c := &client{
-		id : atomic.AddInt64(&broker.maxClientId, 1),
+		id : broker.GenerateClientId(),
 		conn: conn,
 		reader: bufio.NewReader(conn),
 		writer: bufio.NewWriter(conn),
@@ -355,8 +353,9 @@ func (c *client)  publish(client2ServerData *protocol.Client2Server)  (response 
 		return response
 	}else{
 		myLogger.Logger.Printf("publish msg : %s", msg.String())
-		partition.msgChan <- msg
-		response = <- partition.responseChan
+		partition.Put(msg)
+		//partition.msgChan <- msg
+		//response = <- partition.responseChan
 		//response = &protocol.Server2Client{
 		//	Key: protocol.Server2ClientKey_Success,
 		//}

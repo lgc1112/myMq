@@ -15,34 +15,47 @@ type topic struct {
 	maxPartitionNum int64
 }
 
-func newTopic(name string, partitionNum int, broker *Broker) *topic {
+func newTopic(name string, broker *Broker) *topic {
 	t := &topic{
 		broker : broker,
 		name : name,
 		partitionMap : make(map[string]*partition),
 	}
 
-	addr := broker.addr
 
-	broker.partitionMapLock.Lock()
-	for i := 0; i < partitionNum; i++{
-		partitionName := name + "-" + strconv.Itoa(i)
-		partition := newPartition(partitionName, addr)
-		t.partitionMapLock.Lock()
-		t.partitionMap[partitionName] = partition
-		t.partitionMapLock.Unlock()
-		broker.addPartition(&partitionName, partition)
-	}
-	broker.partitionMapLock.Unlock()
-	atomic.StoreInt64(&t.maxPartitionNum, int64(partitionNum))
 
 	return t
 }
+
+func (t *topic) CreatePartitions(partitionNum int, addrs []string){
+	//addr := broker.maddr.ClientListenAddr
+	k := 0
+	addrNum := len(addrs)
+	for i := int(atomic.LoadInt64(&t.maxPartitionNum)); i < partitionNum; i++{
+		partitionName := t.name + "-" + strconv.Itoa(i)
+		partition := newPartition(partitionName, addrs[k % addrNum], addrs[k % addrNum] == t.broker.maddr.ClientListenAddr) //将分区轮询分配给不同的addr
+		t.partitionMapLock.Lock()
+		t.partitionMap[partitionName] = partition
+		t.partitionMapLock.Unlock()
+		t.broker.addPartition(&partitionName, partition)
+		k++
+	}
+	atomic.StoreInt64(&t.maxPartitionNum, int64(partitionNum))
+	return
+}
+
 func (t *topic) getPartition(partitionName *string) (*partition, bool) {
 	t.partitionMapLock.RLock()
 	partition, ok := t.partitionMap[*partitionName]
 	t.partitionMapLock.RUnlock()
 	return partition, ok
+}
+
+func (t *topic) AddPartition(partition *partition){
+	t.partitionMapLock.Lock()
+	t.partitionMap[partition.name] = partition
+	t.partitionMapLock.Unlock()
+	return
 }
 
 func (t *topic)getPartitions() []*protocol.Partition {

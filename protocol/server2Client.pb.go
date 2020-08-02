@@ -53,7 +53,7 @@ var Server2ClientKey_value = map[string]int32{
 func (x Server2ClientKey) String() string {
 	return proto.EnumName(Server2ClientKey_name, int32(x))
 }
-func (Server2ClientKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
+func (Server2ClientKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor5, []int{0} }
 
 type Server2Client struct {
 	Key              Server2ClientKey `protobuf:"varint,1,opt,name=key,enum=protocol.Server2ClientKey" json:"key,omitempty"`
@@ -68,7 +68,7 @@ type Server2Client struct {
 func (m *Server2Client) Reset()                    { *m = Server2Client{} }
 func (m *Server2Client) String() string            { return proto.CompactTextString(m) }
 func (*Server2Client) ProtoMessage()               {}
-func (*Server2Client) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
+func (*Server2Client) Descriptor() ([]byte, []int) { return fileDescriptor5, []int{0} }
 
 func (m *Server2Client) GetKey() Server2ClientKey {
 	if m != nil {
@@ -124,9 +124,9 @@ func init() {
 	proto.RegisterEnum("protocol.Server2ClientKey", Server2ClientKey_name, Server2ClientKey_value)
 }
 
-func init() { proto.RegisterFile("server2Client.proto", fileDescriptor3) }
+func init() { proto.RegisterFile("server2Client.proto", fileDescriptor5) }
 
-var fileDescriptor3 = []byte{
+var fileDescriptor5 = []byte{
 	// 348 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x64, 0x90, 0xdd, 0x8e, 0x9a, 0x40,
 	0x14, 0xc7, 0x8b, 0x88, 0x1f, 0x07, 0xb5, 0xe3, 0xb1, 0x4d, 0x89, 0xbd, 0x21, 0xf6, 0x86, 0x98,

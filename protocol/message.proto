@@ -21,3 +21,8 @@ message Partition {
   string name = 1;
   string addr = 2;
 }
+
+message ListenAddr{
+  string clientListenAddr = 1;
+  string BrokerListenAddr = 2;
+}

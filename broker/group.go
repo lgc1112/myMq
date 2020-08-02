@@ -10,6 +10,7 @@ import (
 
 type group struct {
 	name string
+	broker *Broker
 	sync.RWMutex
 	rebalanceID int32//用于判断是不是最新的修改
 	subscribedTopicsLock sync.RWMutex
@@ -20,9 +21,11 @@ type group struct {
 	client2PartitionMap map[int64] []*protocol.Partition //每个client被分配到的分区，clientId -> Partition
 }
 
-func newGroup(name string) *group {
+func newGroup(name string, rebalanceID int32, broker *Broker) *group {
 	return &group{
 		name: name,
+		rebalanceID: rebalanceID,
+		broker: broker,
 		client2PartitionMap: make(map[int64] []*protocol.Partition),
 	}
 }
@@ -167,12 +170,18 @@ func (g *group)rebalance(){
 	}
 	tmpMap:= make(map[int64] []*protocol.Partition)
 	g.subscribedTopicsLock.RLock()
-	for _, topic := range g.subscribedTopics {
-		for _, partition := range topic.partitionMap {
+	for _, topic := range g.subscribedTopics { //取出该消费者组订阅的所有topic
+		topic.partitionMapLock.RLock()
+		for _, partition := range topic.partitionMap {//取出所有topic的所有分区
+			if !g.broker.IsbrokerAlive(&partition.addr){ //判断该分区所在节点是否还存活，不存活的分区跳过
+				myLogger.Logger.Print("partition do not have alive:", partition.name, "addr:", partition.addr)
+				continue
+			}
 			clientId := g.clients[k % clientNum].id
 			k++
 			tmpMap[clientId] = append(tmpMap[clientId], &protocol.Partition{Name: partition.name, Addr: partition.addr})
  		}
+		topic.partitionMapLock.RUnlock()
 	}
 	g.subscribedTopicsLock.RUnlock()
 	g.client2PartitionMap = tmpMap

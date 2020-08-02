@@ -7,35 +7,34 @@ import (
 	. "sync"
 )
 
-type tcpServer struct {
+type clientTcpServer struct {
 	broker *Broker
 	addr string
 	listener net.Listener//closee这个就可以关闭startTcpServer协程
 }
 
 
-
-func newTcpServer(broker *Broker, addr string) *tcpServer{
-	return &tcpServer{broker:broker, addr:addr}
+func newClientTcpServer(broker *Broker, addr string) *clientTcpServer{
+	return &clientTcpServer{broker:broker, addr:addr}
 }
 
-func (t *tcpServer)startTcpServer() {
+func (c *clientTcpServer)startTcpServer() {
 	var err error
-	t.listener, err = net.Listen("tcp", t.addr)
-	myLogger.Logger.Print("startTcpServer  " + t.addr)
+	c.listener, err = net.Listen("tcp", c.addr)
+	myLogger.Logger.Print("clientTcpServer  " + c.addr)
 	if err != nil {
 		myLogger.Logger.Print(err)
 		log.Fatal(err)
 	}
 	var wg WaitGroup
 	for {
-		conn, err := t.listener.Accept()
+		conn, err := c.listener.Accept()
 		if err != nil {
 			myLogger.Logger.Print(err)
 			break //一般是listener关闭了,则退出这个协程
 		}
 		myLogger.Logger.Print("new client " + conn.RemoteAddr().String())
-		client := newClient(conn, t.broker)
+		client := newClient(conn, c.broker)
 		wg.Add(1)
 		go func() {
 			client.clientHandle()

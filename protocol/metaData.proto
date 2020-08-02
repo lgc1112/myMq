@@ -13,5 +13,7 @@ message Topic{
 
 message Group{
   string name = 1;
-  repeated string subscribedTopics = 2;
+  int32 rebalanceID = 2;
+  repeated string subscribedTopics = 3;
 }
+

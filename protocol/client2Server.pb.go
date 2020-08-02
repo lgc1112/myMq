@@ -2,29 +2,6 @@
 // source: client2Server.proto
 // DO NOT EDIT!
 
-/*
-Package protocol is a generated protocol buffer package.
-
-It is generated from these files:
-	client2Server.proto
-	message.proto
-	metaData.proto
-	server2Client.proto
-
-It has these top-level messages:
-	Client2Server
-	CreatTopicRequest
-	CreatTopicResponse
-	GetPublisherPartitionsRequest
-	GetPublisherPartitionsResponse
-	Message
-	InternalMessage
-	Partition
-	MetaData
-	Topic
-	Group
-	Server2Client
-*/
 package protocol
 
 import proto "github.com/golang/protobuf/proto"
@@ -35,12 +12,6 @@ import math "math"
 var _ = proto.Marshal
 var _ = fmt.Errorf
 var _ = math.Inf
-
-// This is a compile-time assertion to ensure that this generated file
-// is compatible with the proto package it is being compiled against.
-// A compilation error at this line likely means your copy of the
-// proto package needs to be updated.
-const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 
 type Client2ServerKey int32
 
@@ -85,7 +56,7 @@ var Client2ServerKey_value = map[string]int32{
 func (x Client2ServerKey) String() string {
 	return proto.EnumName(Client2ServerKey_name, int32(x))
 }
-func (Client2ServerKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+func (Client2ServerKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
 
 type CreatTopicResponse_ResponseKey int32
 
@@ -110,7 +81,7 @@ func (x CreatTopicResponse_ResponseKey) String() string {
 	return proto.EnumName(CreatTopicResponse_ResponseKey_name, int32(x))
 }
 func (CreatTopicResponse_ResponseKey) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor0, []int{2, 0}
+	return fileDescriptor1, []int{2, 0}
 }
 
 type GetPublisherPartitionsResponse_ResponseKey int32
@@ -139,7 +110,7 @@ func (x GetPublisherPartitionsResponse_ResponseKey) String() string {
 	return proto.EnumName(GetPublisherPartitionsResponse_ResponseKey_name, int32(x))
 }
 func (GetPublisherPartitionsResponse_ResponseKey) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor0, []int{4, 0}
+	return fileDescriptor1, []int{4, 0}
 }
 
 // this is a comment
@@ -158,7 +129,7 @@ type Client2Server struct {
 func (m *Client2Server) Reset()                    { *m = Client2Server{} }
 func (m *Client2Server) String() string            { return proto.CompactTextString(m) }
 func (*Client2Server) ProtoMessage()               {}
-func (*Client2Server) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+func (*Client2Server) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
 
 func (m *Client2Server) GetKey() Client2ServerKey {
 	if m != nil {
@@ -231,7 +202,7 @@ type CreatTopicRequest struct {
 func (m *CreatTopicRequest) Reset()                    { *m = CreatTopicRequest{} }
 func (m *CreatTopicRequest) String() string            { return proto.CompactTextString(m) }
 func (*CreatTopicRequest) ProtoMessage()               {}
-func (*CreatTopicRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{1} }
+func (*CreatTopicRequest) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{1} }
 
 func (m *CreatTopicRequest) GetTopic() string {
 	if m != nil {
@@ -254,7 +225,7 @@ type CreatTopicResponse struct {
 func (m *CreatTopicResponse) Reset()                    { *m = CreatTopicResponse{} }
 func (m *CreatTopicResponse) String() string            { return proto.CompactTextString(m) }
 func (*CreatTopicResponse) ProtoMessage()               {}
-func (*CreatTopicResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{2} }
+func (*CreatTopicResponse) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{2} }
 
 func (m *CreatTopicResponse) GetKey() CreatTopicResponse_ResponseKey {
 	if m != nil {
@@ -270,7 +241,7 @@ type GetPublisherPartitionsRequest struct {
 func (m *GetPublisherPartitionsRequest) Reset()                    { *m = GetPublisherPartitionsRequest{} }
 func (m *GetPublisherPartitionsRequest) String() string            { return proto.CompactTextString(m) }
 func (*GetPublisherPartitionsRequest) ProtoMessage()               {}
-func (*GetPublisherPartitionsRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{3} }
+func (*GetPublisherPartitionsRequest) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{3} }
 
 func (m *GetPublisherPartitionsRequest) GetTopic() string {
 	if m != nil {
@@ -287,7 +258,7 @@ type GetPublisherPartitionsResponse struct {
 func (m *GetPublisherPartitionsResponse) Reset()                    { *m = GetPublisherPartitionsResponse{} }
 func (m *GetPublisherPartitionsResponse) String() string            { return proto.CompactTextString(m) }
 func (*GetPublisherPartitionsResponse) ProtoMessage()               {}
-func (*GetPublisherPartitionsResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{4} }
+func (*GetPublisherPartitionsResponse) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{4} }
 
 func (m *GetPublisherPartitionsResponse) GetKey() GetPublisherPartitionsResponse_ResponseKey {
 	if m != nil {
@@ -314,9 +285,9 @@ func init() {
 	proto.RegisterEnum("protocol.GetPublisherPartitionsResponse_ResponseKey", GetPublisherPartitionsResponse_ResponseKey_name, GetPublisherPartitionsResponse_ResponseKey_value)
 }
 
-func init() { proto.RegisterFile("client2Server.proto", fileDescriptor0) }
+func init() { proto.RegisterFile("client2Server.proto", fileDescriptor1) }
 
-var fileDescriptor0 = []byte{
+var fileDescriptor1 = []byte{
 	// 507 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x53, 0xdb, 0x6e, 0xd3, 0x40,
 	0x10, 0xed, 0xda, 0xcd, 0x6d, 0xd2, 0x86, 0xed, 0x24, 0x20, 0x13, 0x01, 0xb2, 0xcc, 0x8b, 0x85,

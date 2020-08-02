@@ -16,7 +16,7 @@ import "../../consumer"
 
 var sum int32
 const  testTime = 20000 * time.Second//测试时间
-const consumerNum = 10
+const consumerNum = 1
 func main() {
 	addr := flag.String("addr", "0.0.0.0:12345", "ip:port")
 	flag.Parse() //解析参数
@@ -47,14 +47,12 @@ func main() {
 		myLogger.Logger.PrintDebug("NewConsumer:", i)
 	}
 	myLogger.Logger.PrintDebug("NewConsumer finished:")
-	//wg.Wait()
-	timeTicker := time.NewTicker(testTime)//测试开始
-	atomic.StoreInt32(&sum, 0)
-
-
-	<- timeTicker.C
-	seconds := int32(testTime / time.Second)
-	myLogger.Logger.PrintfDebug("consumerNum: %d, test time : %d , send times : %d, qps : %d", consumerNum, seconds, sum, sum / seconds)
+	wg.Wait()
+	//timeTicker := time.NewTicker(testTime)//测试开始
+	//atomic.StoreInt32(&sum, 0)
+	//<- timeTicker.C
+	//seconds := int32(testTime / time.Second)
+	//myLogger.Logger.PrintfDebug("consumerNum: %d, test time : %d , send times : %d, qps : %d", consumerNum, seconds, sum, sum / seconds)
 
 	//
 	//consumer1, err := consumer.NewConsumer(brokerAddrs,"group0")

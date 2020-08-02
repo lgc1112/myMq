@@ -15,7 +15,7 @@ import "../../producer"
 var sum int32
 const  testTime = 10000 * time.Second//测试时间
 const producerNum = 1
-const partitionNum = 10
+const partitionNum = 1
 func main() {
 	fmt.Println("producer start")
 	brokerAddr := flag.String("addr", "0.0.0.0:12345", "ip:port")

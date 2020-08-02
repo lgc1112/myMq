@@ -1,0 +1,17 @@
+syntax = "proto3";
+import "message.proto";
+package protocol;
+
+enum Broker2ControllerKey
+{
+  Heartbeat = 0;
+  RegisterBroker = 1;
+  unRegisterBroker = 2;
+};
+
+message Broker2Controller{
+    Broker2ControllerKey key = 1;
+    ListenAddr addr = 2;
+}
+
+

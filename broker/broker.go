@@ -9,24 +9,35 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 )
-const logDir string = "./broker/log/"
+const logDir string = "./broker/"
 const openCluster bool = true
+const defaultClientListenAddr = "0.0.0.0:12345" //client监听地址
+const defaultBrokerListenAddr = "0.0.0.0:12346" //broker监听地址
 
 type Broker struct {
 	isController bool
 
 	maxClientId int64
-	addr string
-	tcpServer     *tcpServer
 
-	//topicMapLock sync.RWMutex
+	//addr string
+	maddr *protocol.ListenAddr //我的监听地址
+	masterAddr string //master的监听地址
+	clientTcpServer     *clientTcpServer //client
+	brokerTcpServer     *brokerTcpServer //controller
+
+	topicMapLock sync.RWMutex
 	topicMap map[string] *topic
 
-	partitionMapLock sync.RWMutex //只有这个map会在其它协程中范围，其它map都不会，不需要加锁
+	brokerMapLock sync.RWMutex
+	aliveBrokerMap map[string] *controller2BrokerConn //保存连接到controller的broker，key为brokerAddr
+
+	partitionMapLock sync.RWMutex //只有这个map会在其它协程中访问，其它map都不会，不需要加锁
 	partitionMap map[string] *partition //partionName to *partition
 
-	//groupMapLock sync.RWMutex
+	groupMapLock sync.RWMutex
 	groupMap map[string] *group
 
 	//clientMapLock sync.RWMutex
@@ -44,6 +55,8 @@ type Broker struct {
 	needExit bool
 
 	etcdClient *etcdClient
+
+	broker2ControllerConn *broker2ControllerConn
 }
 type clientChange struct {
 	isAdd bool
@@ -58,15 +71,24 @@ type readData struct {
 
 
 func New(exitSignal chan os.Signal) (*Broker, error) {
-	addr := flag.String("addr", "0.0.0.0:12345", "ip:port")
+	clientListenAddr := flag.String("clientListenAddr", defaultClientListenAddr, "ip:port")
+	brokerListenAddr := flag.String("brokerListenAddr", defaultBrokerListenAddr, "ip:port")
 	flag.Parse() //解析参数
 
 
-	if *addr == "0.0.0.0:12345" {
-		*addr = getIntranetIp() + ":12345"
+	host, port, _ := net.SplitHostPort(*clientListenAddr)
+	if host == "0.0.0.0" { //转换为本地ip
+		*clientListenAddr = getIntranetIp() + ":" + port
+		//fmt.Println(*clientListenAddr)
 	}
-
-	_, err:= myLogger.New(logDir)
+	host, port, _ = net.SplitHostPort(*brokerListenAddr)
+	if host == "0.0.0.0" { //转换为本地ip
+		_, port, _ := net.SplitHostPort(*brokerListenAddr)
+		*brokerListenAddr = getIntranetIp() + ":" + port
+		//fmt.Println(*brokerListenAddr)
+	}
+	_, err:= myLogger.New(logDir + port + "log/")
+	myLogger.Logger.Print(*clientListenAddr, " ", *brokerListenAddr)
 
 	broker := &Broker{
 		topicMap: make(map[string]*topic),
@@ -74,16 +96,36 @@ func New(exitSignal chan os.Signal) (*Broker, error) {
 		clientMap: make(map[int64]*client),
 		partitionMap: make(map[string]*partition),
 		readChan: make(chan *readData),
+		aliveBrokerMap: make(map[string] *controller2BrokerConn),
 		clientChangeChan: make(chan *clientChange),
-		addr: *addr,
+		maddr: &protocol.ListenAddr{
+			ClientListenAddr: *clientListenAddr,
+			BrokerListenAddr: *brokerListenAddr,
+		},
+		//addr: *addr,
 		exitSignal: exitSignal,
 		//exitChan: make(chan string, 2),
 	}
 
-	tcpServer := newTcpServer(broker, *addr)
-	broker.tcpServer = tcpServer
+	tcpServer := newClientTcpServer(broker, *clientListenAddr)
+	broker.clientTcpServer = tcpServer
 	if openCluster{
 		broker.etcdClient, err = NewEtcdClient(broker)
+		broker.etcdClient.clearMetaData()
+		time.Sleep(1 * time.Second) //等待一会，看能竞选成为controller
+		if !broker.isController{ //没有竞选成为controller，需要连接到controller
+
+			masterAddr, err := broker.etcdClient.GetmasterAddr()
+			if err != nil{
+				myLogger.Logger.PrintError(err)
+			}else{
+				if masterAddr != broker.maddr.BrokerListenAddr{
+					broker.masterAddr = masterAddr
+					broker.connect2Controller(broker.masterAddr)
+				}
+			}
+
+		}
 	}
 	return broker, err
 
@@ -107,14 +149,100 @@ func getIntranetIp() string{
 }
 func (b *Broker)retrieveMetaData(){
 	metaData := &protocol.MetaData{}
-	var data []byte
-	err := proto.Unmarshal(data, metaData)
+	data, err := b.etcdClient.GetMetaData()
 	if err != nil {
-		myLogger.Logger.Print("Unmarshal error %s", err)
+		myLogger.Logger.PrintError("GetMetaData error", err)
 		return
 	}
+	err = proto.Unmarshal(data, metaData)
+	if err != nil {
+		myLogger.Logger.PrintError("Unmarshal error", err)
+		return
+	}
+	myLogger.Logger.Print("retrieveMetaData:", metaData)
+	b.topicMap = make(map[string]*topic) //创建topicMap
+	for _, t := range metaData.Topics{
+		topic := newTopic(t.Name, b)
+		b.addTopic(&t.Name, topic)
+		for _, p := range t.Partitions{
+			b.partitionMapLock.Lock()
+			partition, ok := b.partitionMap[p.Name]
+			if !ok { //该分区不存在，新建
+				partition = newPartition(p.Name, p.Addr, p.Addr == b.maddr.ClientListenAddr)
+				b.partitionMap[p.Name] = partition
+			}
+			topic.AddPartition(partition)
+			b.partitionMapLock.Unlock()
+		}
+	}
 
+	b.groupMap = make(map[string]*group) //创建
+	for _, g := range metaData.Groups{
+		group := newGroup(g.Name, g.RebalanceID, b)
+		b.addGroup(group)
+		for _, topicName := range g.SubscribedTopics{
+			t, _ := b.getTopic(&topicName)
+			group.addTopic(t)
+
+			t.partitionMapLock.Lock()
+			for _, p := range t.partitionMap{
+				p.addComsummerGroup(group.name) //添加消费者组
+			}
+			t.partitionMapLock.Unlock()
+		}
+	}
 }
+
+
+func (b *Broker)ChangeMasterAddr(addr string){	//master地址变化时被调用
+	b.masterAddr = addr
+	if !b.isController{ //我不是controller
+		if b.broker2ControllerConn != nil{
+			if b.broker2ControllerConn.addr != b.masterAddr{//controller以更换
+				b.broker2ControllerConn.Close() //关闭原来的
+				b.connect2Controller(b.masterAddr) //连接新的
+			}
+		}else{
+			b.connect2Controller(b.masterAddr)
+		}
+	}
+	myLogger.Logger.Print("ChangeMasterAddr ", addr)
+}
+
+func (b *Broker) BecameController()  { //竞选成功时调用
+	b.isController = true
+	b.retrieveMetaData() //取回集群数据
+	b.brokerTcpServer = NewBrokerTcpServer(b, b.maddr.BrokerListenAddr) //监听broker连接
+	go b.brokerTcpServer.startTcpServer() //开启broker监听服务
+	if b.broker2ControllerConn != nil{
+		myLogger.Logger.Print("close broker2ControllerConn")
+		b.broker2ControllerConn.Close() //关闭到master的连接
+		b.broker2ControllerConn = nil
+	}
+	if err := b.etcdClient.PutMasterAddr(b.maddr); err != nil { //上传自己的监听地址
+		myLogger.Logger.PrintError(err)
+		return
+	}
+	myLogger.Logger.Print("BecameController")
+}
+
+func (b *Broker) BecameNormalBroker()  { //被取消controller资格时调用，断线超过15秒没有发心跳就会失去leader资格
+	b.isController = false
+	if b.brokerTcpServer != nil{
+		b.brokerTcpServer.Close()
+	}
+	if b.broker2ControllerConn != nil{
+		if b.broker2ControllerConn.addr != b.masterAddr{//controller以更换
+			b.broker2ControllerConn.Close() //关闭原来的
+			b.connect2Controller(b.masterAddr) //连接新的
+		}
+	}else{
+		b.connect2Controller(b.masterAddr)
+	}
+	b.CloseAllBrokerConn()
+	myLogger.Logger.Print("BecameNormalBroker")
+}
+
 func (b *Broker)persistMetaData(){
 	metaData := &protocol.MetaData{}
 	for topicName, topic := range b.topicMap{
@@ -154,7 +282,7 @@ func (b *Broker) Run() error {
 		b.wg.Done()
 	}()
 	go func() {
-		b.tcpServer.startTcpServer()
+		b.clientTcpServer.startTcpServer()
 		b.wg.Done()
 	}()
 
@@ -165,16 +293,16 @@ func (b *Broker) Run() error {
 }
 
 func (b *Broker) getTopic(topicName *string) (*topic, bool) {
-	//b.topicMapLock.RLock()
+	b.topicMapLock.RLock()
 	topic, ok := b.topicMap[*topicName]
-	//b.topicMapLock.RUnlock()
+	b.topicMapLock.RUnlock()
 	return topic, ok
 }
 
 func (b *Broker) addTopic(topicName *string, topic *topic) {
-	//b.topicMapLock.Lock()
+	b.topicMapLock.Lock()
 	b.topicMap[*topicName] = topic
-	//b.topicMapLock.Unlock()
+	b.topicMapLock.Unlock()
 	return
 }
 
@@ -193,16 +321,16 @@ func (b *Broker) addPartition(partitionName *string, partition *partition){
 }
 
 func (b *Broker) getGroup(groupName *string) (*group, bool) {
-	//b.groupMapLock.RLock()
+	b.groupMapLock.RLock()
 	group, ok := b.groupMap[*groupName]
-	//b.groupMapLock.RUnlock()
+	b.groupMapLock.RUnlock()
 	return group, ok
 }
 
 func (b *Broker) addGroup(group *group) {
-	//b.groupMapLock.Lock()
+	b.groupMapLock.Lock()
 	b.groupMap[group.name] = group
-	//b.groupMapLock.Unlock()
+	b.groupMapLock.Unlock()
 	return
 }
 
@@ -236,8 +364,8 @@ func (b *Broker) removeClient(clientId int64) {
 }
 
 func (b *Broker) closeClients()  {
-	if b.tcpServer.listener != nil {
-		b.tcpServer.listener.Close()//关闭tcp监听
+	if b.clientTcpServer.listener != nil {
+		b.clientTcpServer.listener.Close()//关闭tcp监听
 	}
 
 	for _, client := range b.clientMap {
@@ -267,15 +395,7 @@ func (b *Broker) exit()  {
 	}
 }
 
-func (b *Broker) BecameController()  {
-	b.isController = true
-	myLogger.Logger.Print("BecameController")
-}
 
-func (b *Broker) BecameNormalBroker()  {
-	b.isController = false
-	myLogger.Logger.Print("BecameNormalBroker")
-}
 
 func (b *Broker) ReadLoop() {
 	var data *readData
@@ -356,6 +476,10 @@ func (b *Broker) ReadLoop() {
 
 
 func (b *Broker)  creatTopic(data *readData)  (response *protocol.Server2Client) {
+	if !b.isController{
+		myLogger.Logger.PrintWarning("try to creatTopic int normal Broker")
+		return nil
+	}
 	request := data.client2serverData
 	topicName := request.Topic
 	partitionNum := request.PartitionNum
@@ -368,7 +492,15 @@ func (b *Broker)  creatTopic(data *readData)  (response *protocol.Server2Client)
 		}
 	} else {
 		myLogger.Logger.Printf("create topic : %s %d", topicName, int(partitionNum))
-		topic = newTopic(topicName, int(partitionNum), b)
+		topic = newTopic(topicName, b)
+		var addrs []string
+		b.brokerMapLock.RLock()
+		addrs = append(addrs, b.maddr.ClientListenAddr) //添加本机地址
+		for addr, _ := range b.aliveBrokerMap{//添加所有存活的地址
+			addrs = append(addrs, addr)
+		}
+		topic.CreatePartitions(int(partitionNum), addrs) //创建partitionNum个分区
+		b.brokerMapLock.RUnlock()
 		b.addTopic(&topicName, topic)
 		response = &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_SendPartions,
@@ -380,6 +512,10 @@ func (b *Broker)  creatTopic(data *readData)  (response *protocol.Server2Client)
 }
 
 func (b *Broker)  getPublisherPartition(data *readData)   (response *protocol.Server2Client) {
+	if !b.isController{
+		myLogger.Logger.PrintWarning("try to getPublisherPartition int normal Broker")
+		return nil
+	}
 	request := data.client2serverData
 	topicName := request.Topic
 	topic, ok := b.getTopic(&topicName)
@@ -453,7 +589,63 @@ func (b *Broker)  getPublisherPartition(data *readData)   (response *protocol.Se
 //	}
 //
 //}
+
+func (b *Broker) GetBrokerConn(brokerAddr *string) (*controller2BrokerConn, bool) {
+	b.brokerMapLock.RLock()
+	brokerConn, ok := b.aliveBrokerMap[*brokerAddr]
+	b.brokerMapLock.RUnlock()
+	return brokerConn, ok
+}
+
+func (b *Broker) CloseAllBrokerConn() {
+	myLogger.Logger.Print("CloseAllBrokerConn: ")
+	b.brokerMapLock.Lock()
+	defer b.brokerMapLock.Unlock()
+
+	for _, controller2BrokerConn := range b.aliveBrokerMap{
+		controller2BrokerConn.conn.Close()
+		delete(b.aliveBrokerMap, controller2BrokerConn.clientListenAddr)
+	}
+}
+
+func (b *Broker) DeleteBrokerConn(controller2BrokerConn *controller2BrokerConn) bool{
+	b.brokerMapLock.Lock()
+	defer b.brokerMapLock.Unlock()
+	_, ok := b.aliveBrokerMap[controller2BrokerConn.clientListenAddr]
+	if !ok {
+		return false
+	}
+	delete(b.aliveBrokerMap, controller2BrokerConn.clientListenAddr)
+	myLogger.Logger.Print("DeleteBrokerConn: ", controller2BrokerConn.clientListenAddr, " len: ", len(b.aliveBrokerMap))
+	return true
+}
+
+func (b *Broker) AddBrokerConn(controller2BrokerConn *controller2BrokerConn) bool{
+	b.brokerMapLock.Lock()
+	defer b.brokerMapLock.Unlock()
+	_, ok := b.aliveBrokerMap[controller2BrokerConn.clientListenAddr]
+	if ok {
+		return false
+	}
+	b.aliveBrokerMap[controller2BrokerConn.clientListenAddr] = controller2BrokerConn
+	myLogger.Logger.Print("AddBrokerConn: ", controller2BrokerConn.clientListenAddr, " len: ", len(b.aliveBrokerMap))
+	return true
+}
+
+func (b *Broker) IsbrokerAlive(brokerAddr *string) bool{
+	if *brokerAddr == b.maddr.ClientListenAddr{ //该broker地址是本机，有效
+		return true
+	}
+	b.brokerMapLock.RLock()
+	defer b.brokerMapLock.RUnlock()
+	_, ok := b.aliveBrokerMap[*brokerAddr]//该broker地址是否存活
+	return ok
+}
 func (b *Broker)  getConsumerPartition(data *readData)   (response *protocol.Server2Client) {
+	if !b.isController{
+		myLogger.Logger.PrintWarning("try to getConsumerPartition int normal Broker")
+		return nil
+	}
 	request := data.client2serverData
 	groupName := request.GroupName
 	group, ok := b.getGroup(&groupName)
@@ -476,6 +668,10 @@ func (b *Broker)  getConsumerPartition(data *readData)   (response *protocol.Ser
 }
 
 func (b *Broker)  subscribeTopic(data *readData)   (response *protocol.Server2Client) {
+	if !b.isController{
+		myLogger.Logger.PrintWarning("try to subscribeTopic int normal Broker")
+		return nil
+	}
 	request := data.client2serverData
 	topicName := request.Topic
 	topic, ok := b.getTopic(&topicName)
@@ -492,7 +688,7 @@ func (b *Broker)  subscribeTopic(data *readData)   (response *protocol.Server2Cl
 	myLogger.Logger.Printf("registerComsummer : %s", groupName)
 	if !ok {
 		myLogger.Logger.Printf("newGroup : %s", groupName)
-		group = newGroup(groupName)
+		group = newGroup(groupName, 0, b)
 		b.addGroup(group)
 	}
 	clientConn, ok := b.getClient(data.clientID)
@@ -553,7 +749,7 @@ func (b *Broker)  registerConsumer(data *readData)   (response *protocol.Server2
 	group, ok := b.getGroup(&groupName)
 	myLogger.Logger.Printf("registerComsummer : %s", groupName)
 	if !ok {
-		group = newGroup(groupName)
+		group = newGroup(groupName, 0, b)
 		b.addGroup(group)
 	}
 	clientConn, ok := b.getClient(data.clientID)
@@ -581,5 +777,25 @@ func (b *Broker)  unRegisterConsumer(data *readData)   (response *protocol.Serve
 		return nil
 	}
 	group.deleteClient(data.clientID)
+	return nil
+}
+
+func (b *Broker)GenerateClientId() int64{
+	return atomic.AddInt64(&b.maxClientId, 1)
+}
+
+func (b *Broker) connect2Controller(addr string) error {
+	var err error
+	b.broker2ControllerConn, err = NewBroker2ControllerConn(addr, b)
+	if err != nil {
+		myLogger.Logger.PrintfError(" connecting to Controller error: %s %s", addr, err)
+		return err
+	}
+	myLogger.Logger.Printf("connecting to Controller - %s", addr)
+	broker2ControllerData := &protocol.Broker2Controller{
+		Key: protocol.Broker2ControllerKey_RegisterBroker,
+		Addr: b.maddr,
+	}
+	b.broker2ControllerConn.Put(broker2ControllerData)
 	return nil
 }
