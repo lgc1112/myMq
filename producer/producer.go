@@ -1,6 +1,7 @@
 package producer
 
 import (
+	"../mylib/etcdClient"
 	"../mylib/myLogger"
 	"../protocol"
 	"encoding/binary"
@@ -9,11 +10,12 @@ import (
 	"log"
 	"sync"
 )
-
+const openCluster bool = true
+const logDir string = "./producer/log/"
 type Producer struct {
 	addrs   []string
 	//Addr   string
-	conn *producerConn
+	controllerConn *producerConn //到master的连接
 	partitionMapLock sync.RWMutex
 	partitionMap map[string] []*protocol.Partition//Partition名 映射到 protocol.Partition
 	sendIdx int
@@ -22,12 +24,13 @@ type Producer struct {
 	brokerConnMap map[string] *producerConn  //broker ip 映射到 producerConn
 	readChan     chan *readData
 	pubishAsk     chan string
+	etcdClient *etcdClient.EtcdClient
+	controllerChange bool
 }
 type readData struct {
 	connName string
 	server2ClientData *protocol.Server2Client
 }
-const logDir string = "./producer/log/"
 func NewProducer(addrs []string) (*Producer, error) {
 	_, err := myLogger.New(logDir)
 	if err != nil {
@@ -41,35 +44,81 @@ func NewProducer(addrs []string) (*Producer, error) {
 		readChan: make(chan *readData),
 		pubishAsk: make(chan string),
 	}
-	err = p.Connect2Brokers()
+	//err = p.Connect2Brokers()
+
+	if openCluster{
+		p.etcdClient, err = etcdClient.NewEtcdClient(p, false)
+		if err != nil{
+			myLogger.Logger.PrintError(err)
+			return nil, err
+		}
+		err = p.connect2Controller() //连接到controller
+		if err != nil{
+			myLogger.Logger.PrintError(err)
+			return nil, err
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 	return p, err
 }
 
+func (p *Producer) connect2Controller() error{
+	masterAddr, err := p.etcdClient.GetControllerAddr() //获取controller地址
+	if err != nil {
+		myLogger.Logger.PrintError(err)
+	}
+	err = p.connect2Broker(masterAddr.ClientListenAddr)
+	if err != nil {
+		myLogger.Logger.PrintError(err)
+	}
+	myLogger.Logger.Print("connect2Controllerrer", masterAddr.ClientListenAddr)
+	p.controllerConn, _ = p.getBrokerConn(&masterAddr.ClientListenAddr)
+	return err
+}
+
+func (p *Producer) ChangeControllerAddr(addr *protocol.ListenAddr) {
+	masterAddr := addr.ClientListenAddr
+	err := p.connect2Broker(masterAddr)
+	if err != nil {
+		myLogger.Logger.PrintError(err)
+	}
+	p.controllerConn, _ = p.getBrokerConn(&masterAddr)
+	p.controllerChange = true
+
+	return
+}
+func (p *Producer) BecameNormalBroker() {
+	myLogger.Logger.PrintError("should not come here")
+	return
+}
+func (p *Producer) BecameController() {
+	myLogger.Logger.PrintError("should not come here")
+	return
+}
 func (p *Producer) addBrokerConn(conn *producerConn) {
 	p.brokerConnMapLock.Lock()
 	p.brokerConnMap[conn.addr] = conn
+	myLogger.Logger.Print("addBrokerConn, current Len", len(p.brokerConnMap))
 	p.brokerConnMapLock.Unlock()
 	return
 }
 
 func (p *Producer) getBrokerConn(addr *string) (*producerConn, bool) {
 	p.brokerConnMapLock.RLock()
+	defer p.brokerConnMapLock.RUnlock()
 	broker, ok := p.brokerConnMap[*addr]
-	p.brokerConnMapLock.RUnlock()
 	return broker, ok
 }
-func (p *Producer) removeBrokerConn(conn *producerConn) {
+func (p *Producer) removeBrokerConn(addr *string) {
 	p.brokerConnMapLock.Lock()
-	_, ok := p.brokerConnMap[conn.addr]
+	defer p.brokerConnMapLock.Unlock()
+	_, ok := p.brokerConnMap[*addr]
 	if !ok {
-		p.brokerConnMapLock.Unlock()
 		return
 	}
-	delete(p.brokerConnMap, conn.addr)
-	p.brokerConnMapLock.Unlock()
+	delete(p.brokerConnMap, *addr)
 }
 
 func (p *Producer) Connect2Brokers() error {
@@ -87,8 +136,7 @@ func (p *Producer) connect2Broker(addr string) error {
 		myLogger.Logger.Printf("connecting to existing broker - %s", addr)
 		return nil
 	}
-	var err error
-	p.conn, err = newConn(addr, p)
+	Conn, err := newConn(addr, p)
 
 	if err != nil {
 		//p.conn.Close()
@@ -98,11 +146,47 @@ func (p *Producer) connect2Broker(addr string) error {
 	}
 	//go p.conn.Handle()
 	myLogger.Logger.Printf("connecting to broker - %s", addr)
-	p.addBrokerConn(p.conn)
+	p.addBrokerConn(Conn)
 	return nil
 }
 
+
+func (p *Producer) DeleteTopic(topic string){
+	if p.controllerConn == nil{
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return
+	}
+	requestData := &protocol.Client2Server{
+		Key: protocol.Client2ServerKey_DeleteTopic,
+		Topic: topic,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		log.Fatal("marshaling error: ", err)
+	}
+
+	err = p.controllerConn.Write(data)
+	if err != nil {
+		myLogger.Logger.PrintError("controllerConn Write err", err)
+		return
+	}
+	myLogger.Logger.Printf("DeleteTopic %s ", topic)
+
+	response, err:= p.controllerConn.readResponse()
+	if err != nil {
+		myLogger.Logger.PrintError("controllerConn readResponse err", err)
+		return
+	}
+	if response.Key == protocol.Server2ClientKey_Success{
+		delete(p.partitionMap, topic)
+	}
+}
+
 func (p *Producer) CreatTopic(topic string, num int32){
+	if p.controllerConn == nil{
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return
+	}
 	requestData := &protocol.Client2Server{
 		Key: protocol.Client2ServerKey_CreatTopic,
 		Topic: topic,
@@ -114,21 +198,34 @@ func (p *Producer) CreatTopic(topic string, num int32){
 	if err != nil {
 		log.Fatal("marshaling error: ", err)
 	}
-	var buf [4]byte
-	bufs := buf[:]
-	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	p.conn.writer.Write(bufs)
-	p.conn.writer.Write(data)
-	p.conn.writer.Flush()
+
+	err = p.controllerConn.Write(data)
+	if err != nil {
+		myLogger.Logger.PrintError("controllerConn Write err", err)
+		return
+	}
 	myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
 
-	response, err:= p.conn.readResponse()
+	response, err:= p.controllerConn.readResponse()
 	if err == nil{
 		p.partitionMap[topic] = response.Partitions
 	}
 }
 
-func (p *Producer) getPartition(topic string) (*protocol.Partition){ //循环读取
+func (p *Producer) getPartition(topic string) (*protocol.Partition, error){ //循环读取
+	if p.controllerConn == nil{
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return nil, errors.New("controllerConn Not exist")
+	}
+	if p.controllerChange{
+		p.controllerChange = false
+		myLogger.Logger.Print("topic not exist :", topic)
+		err := p.GetTopicPartition(topic)
+		if err != nil {
+			myLogger.Logger.Print("getPartition error: ", err)
+			return nil,err
+		}
+	}
 	p.partitionMapLock.RLock()
 	defer p.partitionMapLock.RUnlock()
 	partitions, ok := p.partitionMap[topic]
@@ -137,39 +234,35 @@ func (p *Producer) getPartition(topic string) (*protocol.Partition){ //循环读
 		err := p.GetTopicPartition(topic)
 		if err != nil {
 			myLogger.Logger.Print("getPartition error: ", err)
-			return nil
+			return nil, err
 		}
 	}
-	partitions, ok = p.partitionMap[topic]
-	if !ok {
-		myLogger.Logger.Print("topic not exist :", topic)
-		err := p.GetTopicPartition(topic)
-		if err != nil {
-			myLogger.Logger.Print("getPartition error: ", err)
-			return nil
-		}
-	}
-
 	len := len(partitions)
 	if len == 0{
 		myLogger.Logger.Print("getPartition err")
-		return nil
+		return nil, errors.New("do not have partition")
 	}
 	p.sendIdx++
 	if p.sendIdx >= len{
 		p.sendIdx %= len
 	}
-	return partitions[p.sendIdx]
+	return partitions[p.sendIdx], nil
 }
-func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
-	msg := &protocol.Message{
-		Priority: prioroty,
-		Msg: data,
-	}
-	partition := p.getPartition(topic)
+
+func (p *Producer) PubilshHelper(topic string, partition *protocol.Partition, msg *protocol.Message) error{
+
 	if partition == nil{
 		return errors.New("cannot get partition")
 	}
+	brokerConn, ok := p.getBrokerConn(&partition.Addr)
+	if !ok {
+		err := p.connect2Broker(partition.Addr)
+		if err != nil {
+			return errors.New("cannot connect partition")
+		}
+		brokerConn, _ = p.getBrokerConn(&partition.Addr)
+	}
+
 	requestData := &protocol.Client2Server{
 		Key: protocol.Client2ServerKey_Publish,
 		Topic: topic,
@@ -181,26 +274,100 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 	if err != nil {
 		log.Fatal("marshaling error: ", err)
 	}
-
-	p.conn.Write(data)
+	err = brokerConn.Write(data)
 	if err != nil {
-		myLogger.Logger.PrintError("writer error: ", err)
+		//myLogger.Logger.PrintError("writer error: ", err)
 		return err
 	}
 	//p.conn.conn.Close()
 	myLogger.Logger.Printf("Pubilsh %s", requestData)
-	response, err:= p.conn.readResponse()
+	response, err:= brokerConn.readResponse()
 	if err == nil{
 		if response.Key == protocol.Server2ClientKey_PublishSuccess{
 			myLogger.Logger.Print("PublishSuccess")
 		}
 	}else{
-		myLogger.Logger.Print("PublishError")
+		//myLogger.Logger.Print("PublishError")
+		return errors.New("PublishError")
 	}
-
 	return nil
 }
 
+func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
+	msg := &protocol.Message{
+		Priority: prioroty,
+		Msg: data,
+	}
+
+	partition, err := p.getPartition(topic)
+	if err != nil{
+		return err
+	}
+	err = p.PubilshHelper(topic, partition, msg)
+	if err != nil{ //该分区所在已经失效，删除
+		p.partitionMapLock.Lock()
+		defer p.partitionMapLock.Unlock()
+		p.removeBrokerConn(&partition.Addr)
+		var tmp[]*protocol.Partition
+		for _, par := range p.partitionMap[topic]{ //删除所有失效分区
+			if par.Addr != partition.Addr{
+				tmp = append(tmp, par)
+			}
+		}
+		p.partitionMap[topic] = tmp
+	}
+	return err
+
+}
+
+
+//func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
+//	msg := &protocol.Message{
+//		Priority: prioroty,
+//		Msg: data,
+//	}
+//	partition := p.getPartition(topic)
+//	if partition == nil{
+//		return errors.New("cannot get partition")
+//	}
+//	brokerConn, ok := p.getBrokerConn(&partition.Addr)
+//	if !ok {
+//		err := p.connect2Broker(partition.Addr)
+//		if err != nil {
+//			return errors.New("cannot connect partition")
+//		}
+//		brokerConn, _ = p.getBrokerConn(&partition.Addr)
+//	}
+//
+//	requestData := &protocol.Client2Server{
+//		Key: protocol.Client2ServerKey_Publish,
+//		Topic: topic,
+//		Partition:partition.Name,
+//		Msg: msg,
+//	}
+//	//p.conn.writeChan <- requestData
+//	data, err := proto.Marshal(requestData)
+//	if err != nil {
+//		log.Fatal("marshaling error: ", err)
+//	}
+//	err = brokerConn.Write(data)
+//	if err != nil {
+//		myLogger.Logger.PrintError("writer error: ", err)
+//		return err
+//	}
+//	//p.conn.conn.Close()
+//	myLogger.Logger.Printf("Pubilsh %s", requestData)
+//	response, err:= brokerConn.readResponse()
+//	if err == nil{
+//		if response.Key == protocol.Server2ClientKey_PublishSuccess{
+//			myLogger.Logger.Print("PublishSuccess")
+//		}
+//	}else{
+//		myLogger.Logger.Print("PublishError")
+//		p.GetTopicPartition(topic)
+//	}
+//	return nil
+//}
 //func (p *Producer) PubilshAsync(topic string, data []byte, prioroty int32) error{
 //	msg := &protocol.Message{
 //		Priority: prioroty,
@@ -249,6 +416,10 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 
 
 func (p *Producer) GetTopicPartition(topic string) error{
+	if p.controllerConn == nil{
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return nil
+	}
 	requestData := &protocol.Client2Server{
 		Key: protocol.Client2ServerKey_GetPublisherPartition,
 		Topic: topic,
@@ -263,13 +434,15 @@ func (p *Producer) GetTopicPartition(topic string) error{
 	var buf [4]byte
 	bufs := buf[:]
 	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	p.conn.writer.Write(bufs)
-	p.conn.writer.Write(data)
-	p.conn.writer.Flush()
+	p.controllerConn.writer.Write(bufs)
+	p.controllerConn.writer.Write(data)
+	p.controllerConn.writer.Flush()
 	myLogger.Logger.Printf("GetTopicPartion %s : %s", topic, requestData)
 
-	response, err:= p.conn.readResponse()
+	response, err:= p.controllerConn.readResponse()
 	if err == nil{
+
+
 		p.partitionMap[topic] = response.Partitions
 	}
 	return nil

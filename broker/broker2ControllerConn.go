@@ -76,7 +76,7 @@ func (b *broker2ControllerConn)Put(broker2ControllerData *protocol.Broker2Contro
 	select {
 	case b.writeMsgChan <- broker2ControllerData:
 		//myLogger.Logger.Print("do not have client")
-	case <-time.After(100 * time.Microsecond):
+	case <-time.After(500 * time.Microsecond):
 		myLogger.Logger.PrintWarning("broker2ControllerData Put fail")
 		return errors.New("put fail")
 	}
@@ -97,7 +97,7 @@ func (b *broker2ControllerConn) writeLoop() {
 		case s := <- b.exitChan:
 			myLogger.Logger.Print(s)
 			goto exit
-		case broker2ControllerData := <- b.writeMsgChan: //如果向客户端发送了一条消息，则客户端目前可接受的数据量readyCount应该减一
+		case broker2ControllerData := <- b.writeMsgChan: //向客户端发送了一条消息
 			myLogger.Logger.Printf("broker2ControllerConn write %s", broker2ControllerData.String())
 			data, err := proto.Marshal(broker2ControllerData)
 			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
@@ -168,9 +168,31 @@ func (b *broker2ControllerConn)readLoop() {
 
 		switch controller2BrokerData.Key {
 		case protocol.Controller2BrokerKey_DeletePartition:
+			if controller2BrokerData.Partitions.Addr != b.broker.maddr.ClientListenAddr{
+				myLogger.Logger.PrintError("should not come here")
+				break
+			}
+			partition, ok := b.broker.getPartition(&controller2BrokerData.Partitions.Name)
+			if !ok {
+				myLogger.Logger.PrintWarning("try to delete not exist partition:", controller2BrokerData.Partitions.Name)
+			}else{
+				myLogger.Logger.Printf("Delete Partition : %s", controller2BrokerData.Partitions.Name)
+				b.broker.deletePartition(&controller2BrokerData.Partitions.Name)
+				partition.exit()
+			}
 
 		case protocol.Controller2BrokerKey_CreadtPartition:
-
+			if controller2BrokerData.Partitions.Addr != b.broker.maddr.ClientListenAddr{
+				myLogger.Logger.PrintError("should not come here")
+				break
+			}
+			partition := newPartition(controller2BrokerData.Partitions.Name, controller2BrokerData.Partitions.Addr, true, b.broker) //创建分区
+			myLogger.Logger.Printf("Create Partition : %s", controller2BrokerData.Partitions.Name)
+			b.broker.addPartition(&controller2BrokerData.Partitions.Name, partition) //保存分区
+			response := &protocol.Broker2Controller{
+				Key: protocol.Broker2ControllerKey_CreadtPartitionSuccess,
+			}
+			b.writeMsgChan <- response
 		default:
 			myLogger.Logger.Print("cannot find key")
 		}

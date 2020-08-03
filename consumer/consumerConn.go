@@ -5,10 +5,12 @@ import (
 	"../protocol"
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"github.com/golang/protobuf/proto"
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 type consumerConn struct {
@@ -125,4 +127,17 @@ func (c *consumerConn)writeLoop()  {
 	}
 	exit:
 		myLogger.Logger.Printf("writeLoop exit:")
+}
+func (c *consumerConn) Put(data *protocol.Client2Server) error{
+
+	select {
+	case c.writeChan <- data:
+		//myLogger.Logger.Print("do not have client")
+	case <-time.After(100 * time.Microsecond):
+		myLogger.Logger.PrintError("write controller2BrokerConn fail")
+		return errors.New("write controller2BrokerConn fail")
+	}
+
+	return nil
+
 }

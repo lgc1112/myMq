@@ -72,9 +72,7 @@ func (c *client)clientHandle() {
 	myLogger.Logger.Print("a client leave2")
 }
 
-func (c *client)forceExit() {
 
-}
 func (c *client)clientExit() {
 	//c.isbrokerExitLock1.RLock()
 	if c.isbrokerExit{//如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
@@ -106,11 +104,9 @@ func (c *client)clientExit() {
 		myLogger.Logger.Printf("exit client belong to group : %s", c.belongGroup)
 		succ:= group.deleteClient(c.id) //从group中删除
 		if succ {
-			//c.isbrokerExitLock1.RLock()
 			if !c.isbrokerExit { //如果是broker退出了不用做负载均衡操作。
-				group.rebalance()
+				group.Rebalance()
 			}
-			//c.isbrokerExitLock1.RUnlock()
 		}
 	}
 
@@ -127,11 +123,9 @@ func (c *client)clientExit() {
 	}
 	c.broker.partitionMapLock.RUnlock()
 
-	//c.isbrokerExitLock1.RLock()
 	if !c.isbrokerExit { //如果是broker退出了说明conn已经关闭了
 		c.conn.Close()
 	}
-	//c.isbrokerExitLock1.RUnlock()
 	close(c.writeMsgChan)
 	close(c.writeCmdChan)
 	close(c.changeReadyNum)
@@ -156,7 +150,7 @@ func (c *client) writeLoop() {
 				myLogger.Logger.Print("change readyNum: ", c.readyNum)
 			}
 			if c.readyNum <= 0{
-				writeMsgChan =  nil//不可以往客户端写
+				//writeMsgChan =  nil//不可以往客户端写
 			}else{
 				writeMsgChan =  c.writeMsgChan//可以开始往客户端写
 			}
@@ -164,7 +158,7 @@ func (c *client) writeLoop() {
 			c.readyNum--
 			if c.readyNum <= 0{
 				myLogger.Logger.Print("client not ready")
-				writeMsgChan = nil //不能再发消息了，除非client重现提交readycount
+				//writeMsgChan = nil //不能再发消息了，除非client重现提交readycount
 			}
 			myLogger.Logger.Printf("writeMsgChan %s", server2ClientData.String())
 			data, err := proto.Marshal(server2ClientData)
@@ -264,26 +258,63 @@ func (c *client)readLoop() {
 		}else{
 			myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
 		}
-		if client2ServerData.Key == protocol.Client2ServerKey_CommitReadyNum{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
+		var response *protocol.Server2Client
+		switch client2ServerData.Key {
+		//case protocol.Client2ServerKey_CreatTopic:
+		//	response = c.broker.creatTopic(client2ServerData)
+		//case protocol.Client2ServerKey_GetPublisherPartition:
+		//	response = b.getPublisherPartition(data)
+		//case protocol.Client2ServerKey_GetConsumerPartition:
+		//	response = b.getConsumerPartition(data)
+		//case protocol.Client2ServerKey_SubscribePartion:
+		//	response = b.subscribePartition(data)
+		//case protocol.Client2ServerKey_SubscribeTopic:
+		//	response = b.subscribeTopic(data)
+		//case protocol.Client2ServerKey_RegisterConsumer:
+		//	response = b.registerConsumer(data)
+		//case protocol.Client2ServerKey_UnRegisterConsumer:
+		//	response = b.unRegisterConsumer(data)
+		case protocol.Client2ServerKey_Publish:
+			response = c.publish(client2ServerData)
+			if response != nil{
+				c.writeCmdChan <- response
+			}
+			//continue
+		case protocol.Client2ServerKey_CommitReadyNum://readyCount提交
 			c.changeReadyNum <- client2ServerData.ReadyNum //修改readyCount
-			continue
-		}
-		if client2ServerData.Key == protocol.Client2ServerKey_ConsumeSuccess{//如果向客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
-			c.changeReadyNum <- -1 //修改readyCount++
-			response := c.consumeSuccess(client2ServerData)
+			//continue
+		case protocol.Client2ServerKey_ConsumeSuccess:
+			c.changeReadyNum <- -1 //修改readyCount++,如果客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
+			response = c.consumeSuccess(client2ServerData)
 			if response != nil{
 				c.writeCmdChan <- response
 			}
-			continue
+			//continue
+		default:
+			c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
 		}
-		if client2ServerData.Key == protocol.Client2ServerKey_Publish{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
-			response := c.publish(client2ServerData)
-			if response != nil{
-				c.writeCmdChan <- response
-			}
-			continue
-		}
-		c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
+
+
+		//if client2ServerData.Key == protocol.Client2ServerKey_CommitReadyNum{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
+		//	c.changeReadyNum <- client2ServerData.ReadyNum //修改readyCount
+		//	continue
+		//}
+		//if client2ServerData.Key == protocol.Client2ServerKey_ConsumeSuccess{//如果向客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
+		//	c.changeReadyNum <- -1 //修改readyCount++
+		//	response := c.consumeSuccess(client2ServerData)
+		//	if response != nil{
+		//		c.writeCmdChan <- response
+		//	}
+		//	continue
+		//}
+		//if client2ServerData.Key == protocol.Client2ServerKey_Publish{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
+		//	response := c.publish(client2ServerData)
+		//	if response != nil{
+		//		c.writeCmdChan <- response
+		//	}
+		//	continue
+		//}
+		//c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
 
 		//var response *protocol.Server2Client
 		//switch request.Key {
@@ -353,7 +384,7 @@ func (c *client)  publish(client2ServerData *protocol.Client2Server)  (response 
 		return response
 	}else{
 		myLogger.Logger.Printf("publish msg : %s", msg.String())
-		partition.Put(msg)
+		response = partition.Put(msg)
 		//partition.msgChan <- msg
 		//response = <- partition.responseChan
 		//response = &protocol.Server2Client{

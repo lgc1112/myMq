@@ -1,9 +1,9 @@
-package broker
+package etcdClient
 
 
 import (
-	"../mylib/myLogger"
-	"../protocol"
+	"../../protocol"
+	"../myLogger"
 	"context"
 	"github.com/golang/protobuf/proto"
 	"go.etcd.io/etcd/clientv3"
@@ -17,30 +17,37 @@ const masterAddrKey = "/masterAddr"
 const metaDataKey = "/metaData"
 var endpoints = []string{"9.135.8.253:2379"}
 
+type EtcdListener interface {
+	ChangeControllerAddr(*protocol.ListenAddr)
+	BecameNormalBroker()
+	BecameController()
+}
 
-type etcdClient struct{
-	broker *Broker
+type EtcdClient struct{
+	broker EtcdListener
 	client *clientv3.Client
 	IsLeader bool
 }
 
-func NewEtcdClient(broker *Broker) (*etcdClient, error){
+func NewEtcdClient(broker EtcdListener, needCampaign bool) (*EtcdClient, error){
 	client, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 5 * time.Second})
 	if err != nil {
 		myLogger.Logger.Print(err)
 		return nil, err
 	}
 	//kv := clientv3.NewKV(client)
-	e := &etcdClient{
+	e := &EtcdClient{
 		broker: broker,
 		client: client,
 	}
-	go e.campaign(prefix, "1")
+	if needCampaign{
+		go e.campaign(prefix, "1")	
+	}
 	go e.watcher()
 	return e, nil
 }
 
-func (e *etcdClient)PutMetaData(val string)  error{
+func (e *EtcdClient)PutMetaData(val string)  error{
 	//var putResp *clientv3.PutResponse
 	if _, err := e.client.Put(context.TODO(), metaDataKey, val); err != nil {
 		myLogger.Logger.PrintError(err)
@@ -49,7 +56,7 @@ func (e *etcdClient)PutMetaData(val string)  error{
 	return nil
 }
 
-func (e *etcdClient)PutMasterAddr(addr *protocol.ListenAddr)  error{
+func (e *EtcdClient)PutControllerAddr(addr *protocol.ListenAddr)  error{
 	//var putResp *clientv3.PutResponse
 	data, err := proto.Marshal(addr)
 	if _, err = e.client.Put(context.TODO(), masterAddrKey, string(data)); err != nil {
@@ -60,12 +67,12 @@ func (e *etcdClient)PutMasterAddr(addr *protocol.ListenAddr)  error{
 	return nil
 }
 
-func (e *etcdClient)GetmasterAddr()  (string, error){
+func (e *EtcdClient)GetControllerAddr()  (*protocol.ListenAddr, error){
 	var getResp *clientv3.GetResponse
 	var err error
 	if getResp, err = e.client.Get(context.TODO(), masterAddrKey); err != nil {
 		myLogger.Logger.PrintError(err)
-		return "", err
+		return nil, err
 	}
 
 	listenAddr := &protocol.ListenAddr{}
@@ -73,24 +80,24 @@ func (e *etcdClient)GetmasterAddr()  (string, error){
 		err = proto.Unmarshal(getResp.Kvs[0].Value, listenAddr)
 		if err != nil {
 			myLogger.Logger.PrintError(err)
-			return "", err
+			return nil, err
 		}
 	}
 	// 获得当前revision
 	//watchStartRevision := getResp.Header.Revision + 1
 
-	myLogger.Logger.Print("GetmasterAddr:", listenAddr.BrokerListenAddr)
+	myLogger.Logger.Print("GetmasterAddr:", listenAddr)
 	//myLogger.Logger.Print("从该版本向后监听:", watchStartRevision)
-	return listenAddr.BrokerListenAddr, nil
+	return listenAddr, nil
 }
 
-func (e *etcdClient)clearMetaData()  {
+func (e *EtcdClient)ClearMetaData()  {
 	if _, err := e.client.Delete(context.TODO(), metaDataKey, clientv3.WithPrevKV()); err != nil {
 		myLogger.Logger.PrintError(err)
 		return
 	}
 }
-func (e *etcdClient)GetMetaData() ([]byte, error){
+func (e *EtcdClient)GetMetaData() ([]byte, error){
 	//e.clearMetaData()
 	var getResp *clientv3.GetResponse
 	var err error
@@ -107,7 +114,7 @@ func (e *etcdClient)GetMetaData() ([]byte, error){
 	}
 }
 
-func (e *etcdClient)watcher()  {
+func (e *EtcdClient)watcher()  {
 	//e.GetmasterAddr()
 
 	watcher := clientv3.NewWatcher(e.client)
@@ -134,7 +141,7 @@ func (e *etcdClient)watcher()  {
 						continue
 					}
 					myLogger.Logger.Print("当前值:", listenAddr)
-					e.broker.ChangeMasterAddr(listenAddr.BrokerListenAddr)
+					e.broker.ChangeControllerAddr(listenAddr)
 				case mvccpb.DELETE:
 					myLogger.Logger.Print("删除了", "Revision:", event.Kv.ModRevision)
 				default:
@@ -146,7 +153,7 @@ func (e *etcdClient)watcher()  {
 	myLogger.Logger.Print("bye")
 }
 
-func (e *etcdClient)campaign( election string, prop string) {
+func (e *EtcdClient)campaign( election string, prop string) {
 	for {
 		s, err := concurrency.NewSession(e.client, concurrency.WithTTL(15))
 		if err != nil {

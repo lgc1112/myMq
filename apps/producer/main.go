@@ -15,7 +15,7 @@ import "../../producer"
 var sum int32
 const  testTime = 10000 * time.Second//测试时间
 const producerNum = 1
-const partitionNum = 1
+const partitionNum = 6
 func main() {
 	fmt.Println("producer start")
 	brokerAddr := flag.String("addr", "0.0.0.0:12345", "ip:port")
@@ -39,6 +39,7 @@ func main() {
 			os.Exit(1)
 		}
 		if i == 0{
+			p.DeleteTopic("fff") //先删除原来的分区
 			p.CreatTopic("fff", partitionNum)
 		}
 		wg.Add(1)
@@ -81,8 +82,10 @@ func producerHandle(p *producer.Producer)  int64{
 			time.Sleep(1*time.Second)
 			err := p.Pubilsh("fff", []byte(s), 0)
 			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
+				myLogger.Logger.PrintError(err)
+				//os.Exit(1)
+				i--
+				continue
 			}
 			atomic.AddInt32(&sum, 1)
 		}

@@ -11,10 +11,11 @@ type partition struct {
 	name string
 	addr string
 	subscribedGroupsLock sync.RWMutex
-	subscribedGroups map[string] *subscribedGroup //groupName -> *client
+	subscribedGroups map[string] *subscribedGroup //groupName -> *subscribedGroup
 	curMsgId int32
 	wg sync.WaitGroup
 
+	broker *Broker
 	msgChan     chan *protocol.Message
 	responseChan chan *protocol.Server2Client
 	msgAskChan     chan *msgAskData
@@ -32,11 +33,12 @@ type msgAskData struct {
 	msgId int32
 	groupName string
 }
-func newPartition(name string, addr string, isNativePartiton bool)  *partition{
+func newPartition(name string, addr string, isNativePartiton bool, broker *Broker)  *partition{
 	if !isNativePartiton{ //不是本地的分区
 		partition := &partition{
 			name : name,
 			addr : addr,
+			broker: broker,
 			isNativePartition:isNativePartiton,
 		}
 		return partition
@@ -47,6 +49,7 @@ func newPartition(name string, addr string, isNativePartiton bool)  *partition{
 	partition := &partition{
 		name : name,
 		addr : addr,
+		broker: broker,
 		isNativePartition:isNativePartiton,
 		msgChan : make(chan *protocol.Message, msgChanSize),
 		responseChan: make(chan *protocol.Server2Client),
@@ -70,6 +73,7 @@ func (p *partition) Put(msg *protocol.Message) *protocol.Server2Client{
 	}
 	p.msgChan <- msg
 	response := <- p.responseChan
+	myLogger.Logger.Print("Put end")
 	return response
 }
 
@@ -164,7 +168,7 @@ func (p *partition) exit(){
 }
 
 func (p *partition) getGroupRebalanceId( groupName string) int32{
-	myLogger.Logger.Printf("partition %s  addComsummerClient : %s", p.name, groupName)
+	myLogger.Logger.Printf("partition %s  getGroupRebalanceId : %s", p.name, groupName)
 	p.subscribedGroupsLock.RLock()
 	defer p.subscribedGroupsLock.RUnlock()
 	subscribedGroup, ok:= p.subscribedGroups[groupName]
@@ -187,12 +191,25 @@ func (p *partition) addComsummerGroup(groupName string) {
 	subscribedGroup, ok:= p.subscribedGroups[groupName]
 
 	if !ok {
-		subscribedGroup = newPartionGroup(groupName, p.name)
+		subscribedGroup = newPartionGroup(groupName, p.name, p.broker)
 		p.subscribedGroups[groupName] = subscribedGroup
 	}
 	p.subscribedGroupsLock.Unlock()
 
 	myLogger.Logger.Printf("addComsummerGroup : %s", groupName)
+
+}
+
+func (p *partition) addComsummerGroupByInstance(group *subscribedGroup) {
+	myLogger.Logger.Printf("partition %s  addComsummerClient : %s", p.name, group.name)
+	p.subscribedGroupsLock.Lock()
+	_, ok:= p.subscribedGroups[group.name]
+	if !ok {
+		p.subscribedGroups[group.name] = group
+	}
+	p.subscribedGroupsLock.Unlock()
+
+	myLogger.Logger.Printf("addComsummerGroup : %s", group.name)
 
 }
 
@@ -202,7 +219,7 @@ func (p *partition) addComsummerClient(client *client, groupName string, rebalan
 	subscribedGroup, ok:= p.subscribedGroups[groupName]
 
 	if !ok {
-		subscribedGroup = newPartionGroup(groupName, p.name)
+		subscribedGroup = newPartionGroup(groupName, p.name, p.broker)
 		p.subscribedGroups[groupName] = subscribedGroup
 	}
 	subscribedGroup.rebalanceId = rebalanceId

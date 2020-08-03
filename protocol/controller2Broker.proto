@@ -9,7 +9,7 @@ enum Controller2BrokerKey
 };
 message Controller2Broker{
     Controller2BrokerKey key = 1;
-    repeated Partition Partitions = 2;
+    Partition Partitions = 2;
 }
 
 

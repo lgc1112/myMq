@@ -41,7 +41,8 @@ type subscribedGroup struct {
 }
 
 
-func newPartionGroup(name, partitionName string) *subscribedGroup  {
+func newPartionGroup(name string, partitionName string, broker *Broker) *subscribedGroup  {
+	myLogger.Logger.Printf("newPartionGroup %s %s ", name, partitionName)
 	g := &subscribedGroup{
 		readChan: make(chan *protocol.InternalMessage),
 		preparedMsgChan: make(chan *protocol.InternalMessage),
@@ -55,7 +56,7 @@ func newPartionGroup(name, partitionName string) *subscribedGroup  {
 		inflightQueue: list.New(),
 		partitionName: partitionName,
 		name: name,
-		diskQueue1: NewDiskQueue("./data/" + partitionName + "/" + name + "/"),
+		diskQueue1: NewDiskQueue("./" + broker.Id + "data/" + partitionName + "/" + name + "/"),
 		//diskQueue2: NewDiskQueue("./data/" + partitionName + "/" + name + "-p2/"),
 	}
 	g.wg.Add(2)

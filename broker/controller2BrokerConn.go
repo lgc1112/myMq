@@ -5,10 +5,12 @@ import (
 	"../protocol"
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"github.com/golang/protobuf/proto"
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 type controller2BrokerConn struct {
 	id int64
@@ -51,6 +53,7 @@ func (c *controller2BrokerConn)clientHandle() {
 	wg.Wait()
 	c.clientExit()
 	myLogger.Logger.Print("a controller2BrokerConn leave")
+	c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
 }
 
 func (c *controller2BrokerConn)clientExit() {
@@ -79,6 +82,18 @@ func (c *controller2BrokerConn)Write(data []byte) (error){
 		myLogger.Logger.PrintError("writer error: ", err)
 		return err
 	}
+	return nil
+}
+
+func (c *controller2BrokerConn)Put(data *protocol.Controller2Broker) (error){
+	select {
+	case c.writeMsgChan <- data:
+		//myLogger.Logger.Print("do not have client")
+	case <-time.After(500 * time.Microsecond):
+		myLogger.Logger.PrintError("write controller2BrokerConn fail")
+		return errors.New("write controller2BrokerConn fail")
+	}
+
 	return nil
 }
 
@@ -138,8 +153,27 @@ func (c *controller2BrokerConn)readLoop() {
 		case protocol.Broker2ControllerKey_RegisterBroker:
 			c.clientListenAddr = broker2ControllerData.Addr.ClientListenAddr
 			c.broker.AddBrokerConn(c) //注册
+			partitions := c.broker.getPartitionForBroker(&broker2ControllerData.Addr.ClientListenAddr)
+			for _, partition := range partitions{
+				controller2BrokerData := &protocol.Controller2Broker{ //创建分区的消息
+					Key: protocol.Controller2BrokerKey_CreadtPartition,
+					Partitions: &protocol.Partition{
+						Name: partition.Name,
+						Addr: partition.Addr,
+					},
+				}
+				err = c.Put(controller2BrokerData) //发送
+				if err != nil {
+					myLogger.Logger.PrintError("CreadtPartition error:", err, controller2BrokerData)
+				}
+			}
+			//c.broker.RebanlenceAllGroup()
+			c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
+
 		case protocol.Broker2ControllerKey_Heartbeat:
 
+		case protocol.Broker2ControllerKey_CreadtPartitionSuccess:
+			myLogger.Logger.Print("CreadtPartitionSuccess")
 		default:
 			myLogger.Logger.Print("cannot find key")
 		}

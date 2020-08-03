@@ -15,6 +15,7 @@ type group struct {
 	rebalanceID int32//用于判断是不是最新的修改
 	subscribedTopicsLock sync.RWMutex
 	subscribedTopics [] *topic
+	//subscribedTopics map[string] struct{} //key为订阅的topic
 	clientsLock sync.RWMutex
 	clients []*client
 	client2PartitionMapLock sync.RWMutex
@@ -135,7 +136,7 @@ func (g *group)deleteTopic(topic *topic)  {
 	}
 	g.subscribedTopics =  g.subscribedTopics[:j]
 	g.subscribedTopicsLock.Unlock()
-	g.rebalance()
+	//g.Rebalance()
 }
 
 func (g *group)notifyClients()  {
@@ -160,7 +161,7 @@ func (g *group)notifyClients()  {
 	myLogger.Logger.Print("notifyClients end")
 }
 
-func (g *group)rebalance(){
+func (g *group)Rebalance(){
 	myLogger.Logger.Print("rebalance")
 	k := 0
 	clientNum := len(g.clients)
