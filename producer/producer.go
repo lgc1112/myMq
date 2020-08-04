@@ -3,11 +3,10 @@ package producer
 import (
 	"../mylib/etcdClient"
 	"../mylib/myLogger"
+	"../mylib/protocalFuc"
 	"../protocol"
-	"encoding/binary"
 	"errors"
 	"github.com/golang/protobuf/proto"
-	"log"
 	"sync"
 )
 const openCluster bool = true
@@ -57,6 +56,8 @@ func NewProducer(addrs []string) (*Producer, error) {
 			myLogger.Logger.PrintError(err)
 			return nil, err
 		}
+	}else{
+		err = p.Connect2Brokers()
 	}
 	if err != nil {
 		return nil, err
@@ -156,20 +157,39 @@ func (p *Producer) DeleteTopic(topic string){
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return
 	}
-	requestData := &protocol.Client2Server{
-		Key: protocol.Client2ServerKey_DeleteTopic,
-		Topic: topic,
+	requestData := &protocol.DeleteTopicReq{
+		TopicName: topic,
 	}
 	data, err := proto.Marshal(requestData)
 	if err != nil {
-		log.Fatal("marshaling error: ", err)
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
 	}
-
-	err = p.controllerConn.Write(data)
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdDeleteTopicReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
+	}
+	err = p.controllerConn.Write(reqData)
 	if err != nil {
 		myLogger.Logger.PrintError("controllerConn Write err", err)
 		return
 	}
+
+	//requestData := &protocol.Client2Server{
+	//	Key: protocol.Client2ServerKey_DeleteTopic,
+	//	Topic: topic,
+	//}
+	//data, err := proto.Marshal(requestData)
+	//if err != nil {
+	//	log.Fatal("marshaling error: ", err)
+	//}
+	//
+	//err = p.controllerConn.Write(data)
+	//if err != nil {
+	//	myLogger.Logger.PrintError("controllerConn Write err", err)
+	//	return
+	//}
 	myLogger.Logger.Printf("DeleteTopic %s ", topic)
 
 	response, err:= p.controllerConn.readResponse()
@@ -187,19 +207,21 @@ func (p *Producer) CreatTopic(topic string, num int32){
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return
 	}
-	requestData := &protocol.Client2Server{
-		Key: protocol.Client2ServerKey_CreatTopic,
-		Topic: topic,
+	requestData := &protocol.CreatTopicReq{
+		TopicName: topic,
 		PartitionNum: num,
 	}
-	//p.conn.writeChan <- requestData
-
 	data, err := proto.Marshal(requestData)
 	if err != nil {
-		log.Fatal("marshaling error: ", err)
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
 	}
-
-	err = p.controllerConn.Write(data)
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCreatTopicReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
+	}
+	err = p.controllerConn.Write(reqData)
 	if err != nil {
 		myLogger.Logger.PrintError("controllerConn Write err", err)
 		return
@@ -207,9 +229,36 @@ func (p *Producer) CreatTopic(topic string, num int32){
 	myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
 
 	response, err:= p.controllerConn.readResponse()
-	if err == nil{
+	if err == nil && response.Key == protocol.Server2ClientKey_SendPartions{
 		p.partitionMap[topic] = response.Partitions
 	}
+
+
+
+
+	//requestData := &protocol.Client2Server{
+	//	Key: protocol.Client2ServerKey_CreatTopic,
+	//	Topic: topic,
+	//	PartitionNum: num,
+	//}
+	////p.conn.writeChan <- requestData
+	//
+	//data, err := proto.Marshal(requestData)
+	//if err != nil {
+	//	log.Fatal("marshaling error: ", err)
+	//}
+	//
+	//err = p.controllerConn.Write(data)
+	//if err != nil {
+	//	myLogger.Logger.PrintError("controllerConn Write err", err)
+	//	return
+	//}
+	//myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
+	//
+	//response, err:= p.controllerConn.readResponse()
+	//if err == nil{
+	//	p.partitionMap[topic] = response.Partitions
+	//}
 }
 
 func (p *Producer) getPartition(topic string) (*protocol.Partition, error){ //循环读取
@@ -219,7 +268,7 @@ func (p *Producer) getPartition(topic string) (*protocol.Partition, error){ //�
 	}
 	if p.controllerChange{
 		p.controllerChange = false
-		myLogger.Logger.Print("topic not exist :", topic)
+		//myLogger.Logger.Print("topic not exist :", topic)
 		err := p.GetTopicPartition(topic)
 		if err != nil {
 			myLogger.Logger.Print("getPartition error: ", err)
@@ -263,24 +312,50 @@ func (p *Producer) PubilshHelper(topic string, partition *protocol.Partition, ms
 		brokerConn, _ = p.getBrokerConn(&partition.Addr)
 	}
 
-	requestData := &protocol.Client2Server{
-		Key: protocol.Client2ServerKey_Publish,
-		Topic: topic,
-		Partition:partition.Name,
+	requestData := &protocol.PublishReq{
+		PartitionName: partition.Name,
 		Msg: msg,
 	}
-	//p.conn.writeChan <- requestData
 	data, err := proto.Marshal(requestData)
 	if err != nil {
-		log.Fatal("marshaling error: ", err)
-	}
-	err = brokerConn.Write(data)
-	if err != nil {
-		//myLogger.Logger.PrintError("writer error: ", err)
+		myLogger.Logger.PrintError("marshaling error", err)
 		return err
 	}
-	//p.conn.conn.Close()
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPublishReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+	err = p.controllerConn.Write(reqData)
+	if err != nil {
+		myLogger.Logger.PrintError("controllerConn Write err", err)
+		return err
+	}
 	myLogger.Logger.Printf("Pubilsh %s", requestData)
+
+
+
+
+	//requestData := &protocol.Client2Server{
+	//	Key: protocol.Client2ServerKey_Publish,
+	//	Topic: topic,
+	//	Partition:partition.Name,
+	//	Msg: msg,
+	//}
+	////p.conn.writeChan <- requestData
+	//data, err := proto.Marshal(requestData)
+	//if err != nil {
+	//	log.Fatal("marshaling error: ", err)
+	//}
+	//err = brokerConn.Write(data)
+	//if err != nil {
+	//	//myLogger.Logger.PrintError("writer error: ", err)
+	//	return err
+	//}
+	////p.conn.conn.Close()
+	//myLogger.Logger.Printf("Pubilsh %s", requestData)
+
+
 	response, err:= brokerConn.readResponse()
 	if err == nil{
 		if response.Key == protocol.Server2ClientKey_PublishSuccess{
@@ -318,6 +393,64 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 	}
 	return err
 
+}
+
+
+func (p *Producer) GetTopicPartition(topic string) error{
+	if p.controllerConn == nil{
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return nil
+	}
+
+	requestData := &protocol.GetPublisherPartitionReq{
+		TopicName: topic,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdGetPublisherPartitionReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+
+	p.controllerConn.writer.Write(reqData)
+	p.controllerConn.writer.Flush()
+	myLogger.Logger.Printf("GetTopicPartion %s : %s", topic, requestData)
+
+	response, err:= p.controllerConn.readResponse()
+	if err == nil{
+		p.partitionMap[topic] = response.Partitions
+	}
+	return nil
+
+
+	//requestData := &protocol.Client2Server{
+	//	Key: protocol.Client2ServerKey_GetPublisherPartition,
+	//	Topic: topic,
+	//}
+	////p.conn.writeChan <- requestData
+	//
+	//data, err := proto.Marshal(requestData)
+	//if err != nil {
+	//	myLogger.Logger.Print("marshaling error: ", err)
+	//	return err
+	//}
+	//var buf [4]byte
+	//bufs := buf[:]
+	//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+	//p.controllerConn.writer.Write(bufs)
+	//p.controllerConn.writer.Write(data)
+	//p.controllerConn.writer.Flush()
+	//myLogger.Logger.Printf("GetTopicPartion %s : %s", topic, requestData)
+	//
+	//response, err:= p.controllerConn.readResponse()
+	//if err == nil && len(response.Partitions) > 0{
+	//	p.partitionMap[topic] = response.Partitions
+	//}
+	//return nil
 }
 
 
@@ -413,38 +546,4 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 //		}
 //	}
 //}
-
-
-func (p *Producer) GetTopicPartition(topic string) error{
-	if p.controllerConn == nil{
-		myLogger.Logger.PrintError("controllerConn Not exist")
-		return nil
-	}
-	requestData := &protocol.Client2Server{
-		Key: protocol.Client2ServerKey_GetPublisherPartition,
-		Topic: topic,
-	}
-	//p.conn.writeChan <- requestData
-
-	data, err := proto.Marshal(requestData)
-	if err != nil {
-		myLogger.Logger.Print("marshaling error: ", err)
-		return err
-	}
-	var buf [4]byte
-	bufs := buf[:]
-	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	p.controllerConn.writer.Write(bufs)
-	p.controllerConn.writer.Write(data)
-	p.controllerConn.writer.Flush()
-	myLogger.Logger.Printf("GetTopicPartion %s : %s", topic, requestData)
-
-	response, err:= p.controllerConn.readResponse()
-	if err == nil{
-
-
-		p.partitionMap[topic] = response.Partitions
-	}
-	return nil
-}
 

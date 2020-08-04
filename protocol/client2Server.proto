@@ -16,6 +16,63 @@ enum Client2ServerKey
   CommitReadyNum = 9;
   DeleteTopic = 10;
 };
+//
+//message Client2ServerHeader{
+//  Client2ServerCmd cmd = 1;
+//  int32 msgLen = 2;
+//}
+//
+//enum Client2ServerCmd{
+//  CmdCreatTopicReq = 0;
+//  CmdCreatTopicRsp = 1;
+//
+//  CmdDeleteTopicReq = 2;
+//  CmdDeleteTopicRsp = 3;
+//
+//  CmdGetPublisherPartitionReq  = 4;
+//  CmdGetPublisherPartitionRsp  = 5;
+//
+//  CmdPublishReq = 6;
+//  CmdPublishRsp = 7;
+//
+//  CmdGetConsumerPartitionReq = 8;
+//  CmdGetConsumerPartitionRsp = 9;
+//
+//  CmdSubscribePartitionReq = 10;
+//  CmdSubscribePartitionRsp = 11;
+//
+//  CmdSubscribeTopicReq = 12;
+//  CmdSubscribeTopicRsp = 13;
+//
+//  CmdRegisterConsumerReq = 14;
+//  CmdRegisterConsumerRsp = 15;
+//
+//  CmdUnRegisterConsumerReq = 16;
+//  CmdUnRegisterConsumerRsp = 17;
+//
+//  CmdCommitReadyNumReq = 20;
+//  CmdCommitReadyNumRsp = 21;
+//}
+//
+//enum RetStatus{
+//  Success = 0;
+//  Fail = 1;
+//}
+//
+//message CreatTopicReq{
+//  string Topic = 1;
+//  int32 PartitionNum = 2;
+//}
+//
+//message CreatTopicRspInfo{
+//  RetStatus ret = 1;
+//  repeated Partition Partitions = 2;
+//}
+//
+////message CreatTopicReqInfo{
+////  RetStatus ret = 1;
+////  int32 PartitionNum = 2;
+////}
 
 
 
@@ -30,35 +87,4 @@ message Client2Server {
   int32 ReadyNum = 7;
   Message msg = 8;
   int32 RebalanceId = 9;
-}
-
-message CreatTopicRequest{
-  string Topic = 1;
-  int32 PartitionNum = 2;
-}
-
-message CreatTopicResponse{
-  enum ResponseKey
-  {
-      TopicExisted = 0;
-      Success = 1;
-      Error = 2;
-  };
-  ResponseKey key = 1;
-}
-
-message GetPublisherPartitionsRequest{
-  string Topic = 1;
-}
-
-message GetPublisherPartitionsResponse{
-  enum ResponseKey
-  {
-    TopicNotExisted = 0;
-    Success = 1;
-    Error = 2;
-    ReturnPartitions = 3;
-  };
-  ResponseKey key = 1;
-  repeated Partition Partitions = 2;
 }

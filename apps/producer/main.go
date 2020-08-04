@@ -39,7 +39,7 @@ func main() {
 			os.Exit(1)
 		}
 		if i == 0{
-			p.DeleteTopic("fff") //先删除原来的分区
+			//p.DeleteTopic("fff") //先删除原来的分区
 			p.CreatTopic("fff", partitionNum)
 		}
 		wg.Add(1)

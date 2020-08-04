@@ -32,7 +32,7 @@ var Controller2BrokerKey_value = map[string]int32{
 func (x Controller2BrokerKey) String() string {
 	return proto.EnumName(Controller2BrokerKey_name, int32(x))
 }
-func (Controller2BrokerKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor2, []int{0} }
+func (Controller2BrokerKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor4, []int{0} }
 
 type Controller2Broker struct {
 	Key        Controller2BrokerKey `protobuf:"varint,1,opt,name=key,enum=protocol.Controller2BrokerKey" json:"key,omitempty"`
@@ -42,7 +42,7 @@ type Controller2Broker struct {
 func (m *Controller2Broker) Reset()                    { *m = Controller2Broker{} }
 func (m *Controller2Broker) String() string            { return proto.CompactTextString(m) }
 func (*Controller2Broker) ProtoMessage()               {}
-func (*Controller2Broker) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{0} }
+func (*Controller2Broker) Descriptor() ([]byte, []int) { return fileDescriptor4, []int{0} }
 
 func (m *Controller2Broker) GetKey() Controller2BrokerKey {
 	if m != nil {
@@ -63,9 +63,9 @@ func init() {
 	proto.RegisterEnum("protocol.Controller2BrokerKey", Controller2BrokerKey_name, Controller2BrokerKey_value)
 }
 
-func init() { proto.RegisterFile("controller2Broker.proto", fileDescriptor2) }
+func init() { proto.RegisterFile("controller2Broker.proto", fileDescriptor4) }
 
-var fileDescriptor2 = []byte{
+var fileDescriptor4 = []byte{
 	// 166 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xe2, 0x12, 0x4f, 0xce, 0xcf, 0x2b,
 	0x29, 0xca, 0xcf, 0xc9, 0x49, 0x2d, 0x32, 0x72, 0x2a, 0xca, 0xcf, 0x4e, 0x2d, 0xd2, 0x2b, 0x28,

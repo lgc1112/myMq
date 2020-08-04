@@ -2,6 +2,7 @@ package broker
 
 import (
 	"../mylib/myLogger"
+	"../mylib/protocalFuc"
 	"../protocol"
 	"bufio"
 	"encoding/binary"
@@ -20,8 +21,8 @@ type client struct {
 	broker *Broker
 	belongGroup string
 	consumePartions map[string] bool //该消费者消费的分区，key:分区名
-	writeCmdChan     chan *protocol.Server2Client
-	writeMsgChan     chan *protocol.Server2Client
+	writeCmdChan     chan []byte
+	writeMsgChan     chan []byte
 	exitChan chan string
 	readyNum int32 //客户端目前可接受的数据量
 	changeReadyNum chan int32 //使得readyNum只在writeLoop协程中修改
@@ -37,8 +38,8 @@ func newClient(conn net.Conn, broker *Broker)  *client{
 		writer: bufio.NewWriter(conn),
 		broker: broker,
 		consumePartions: make(map[string] bool),
-		writeCmdChan: make(chan *protocol.Server2Client),
-		writeMsgChan: make(chan *protocol.Server2Client),
+		writeCmdChan: make(chan []byte),
+		writeMsgChan: make(chan []byte),
 		exitChan: make(chan string),
 		changeReadyNum: make(chan int32),
 		readyNum: defaultreadyNum, //客户端默认可接收数据为1000
@@ -134,7 +135,7 @@ func (c *client)clientExit() {
 
 
 func (c *client) writeLoop() {
-	var server2ClientData *protocol.Server2Client
+	var server2ClientData []byte
 	writeMsgChan := c.writeMsgChan
 	for{
 		select {
@@ -160,23 +161,33 @@ func (c *client) writeLoop() {
 				myLogger.Logger.Print("client not ready")
 				//writeMsgChan = nil //不能再发消息了，除非client重现提交readycount
 			}
-			myLogger.Logger.Printf("writeMsgChan %s", server2ClientData.String())
-			data, err := proto.Marshal(server2ClientData)
-			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
-			if err != nil {
-				myLogger.Logger.PrintError("marshaling error: ", err)
-				continue
-			}
-			var buf [4]byte
-			bufs := buf[:]
-			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-			//c.writerLock.Lock()
-			_, err = c.writer.Write(bufs)
+			myLogger.Logger.Printf("writeMsgChan %s", server2ClientData)
+			//data, err := proto.Marshal(server2ClientData)
+			////myLogger.Logger.Print("send sendResponse len:", len(data), response)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("marshaling error: ", err)
+			//	continue
+			//}
+			//var buf [4]byte
+			//bufs := buf[:]
+			//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+			////c.writerLock.Lock()
+			//_, err = c.writer.Write(bufs)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("writer error: ", err)
+			//	continue
+			//}
+
+			//var buf [4]byte
+			bufs :=  make([]byte, 4)
+			binary.BigEndian.PutUint32(bufs, uint32(len(server2ClientData)))
+			_, err := c.writer.Write(bufs)
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
 			}
-			_, err = c.writer.Write(data)
+
+			_, err = c.writer.Write(server2ClientData)
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
@@ -190,23 +201,32 @@ func (c *client) writeLoop() {
 			//c.sendResponse(response)
 
 		case server2ClientData = <- c.writeCmdChan:
-			myLogger.Logger.Printf("writeResponse %s", server2ClientData.String())
-			data, err := proto.Marshal(server2ClientData)
-			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
-			if err != nil {
-				myLogger.Logger.PrintError("marshaling error: ", err)
-				continue
-			}
-			var buf [4]byte
-			bufs := buf[:]
-			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-			//c.writerLock.Lock()
-			_, err = c.writer.Write(bufs)
+			myLogger.Logger.Printf("writeResponse %s", server2ClientData)
+			//data, err := proto.Marshal(server2ClientData)
+			////myLogger.Logger.Print("send sendResponse len:", len(data), response)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("marshaling error: ", err)
+			//	continue
+			//}
+			//var buf [4]byte
+			//bufs := buf[:]
+			//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+			////c.writerLock.Lock()
+			//_, err = c.writer.Write(bufs)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("writer error: ", err)
+			//	continue
+			//}
+
+			//var buf [4]byte
+			bufs :=  make([]byte, 4)
+			binary.BigEndian.PutUint32(bufs, uint32(len(server2ClientData)))
+			_, err := c.writer.Write(bufs)
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
 			}
-			_, err = c.writer.Write(data)
+			_, err = c.writer.Write(server2ClientData)
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
@@ -224,11 +244,130 @@ exit:
 	//myLogger.Logger.Print("close writeLoop")
 	return
 }
+//
+//func (c *client)readLoop() {
+//	for{
+//		myLogger.Logger.Print("readLoop")
+//		tmp := make([]byte, 4)
+//		_, err := io.ReadFull(c.reader, tmp) //读取长度
+//		if err != nil {
+//			if err == io.EOF {
+//				myLogger.Logger.Print("EOF")
+//			} else {
+//				myLogger.Logger.Print(err)
+//			}
+//			c.exitChan <- "bye"
+//			break
+//		}
+//		len := int32(binary.BigEndian.Uint32(tmp))
+//		myLogger.Logger.Printf("readLen %d ", len)
+//		requestData := make([]byte, len)
+//		_, err = io.ReadFull(c.reader, requestData) //读取内容
+//		if err != nil {
+//			if err == io.EOF {
+//				myLogger.Logger.Print("EOF")
+//			} else {
+//				myLogger.Logger.Print(err)
+//			}
+//			c.exitChan <- "bye"
+//			break
+//		}
+//		clientServerHeader := &protocol.ClientServerHeader{} //读消息头
+//		err = proto.Unmarshal(requestData, clientServerHeader)
+//		if err != nil {
+//			myLogger.Logger.PrintError("Unmarshal error %s", err)
+//			break
+//		}else{
+//			myLogger.Logger.Printf("receive client2ServerData: %s", clientServerHeader)
+//		}
+//
+//
+//
+//
+//
+//		client2ServerData := &protocol.Client2Server{}
+//		err = proto.Unmarshal(requestData, client2ServerData)
+//		if err != nil {
+//			myLogger.Logger.PrintError("Unmarshal error %s", err)
+//		}else{
+//			myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
+//		}
+//		var response *protocol.Server2Client
+//		switch client2ServerData.Key {
+//		case protocol.Client2ServerKey_CreatTopic:
+//			response = c.broker.creatTopic(client2ServerData.Topic, client2ServerData.PartitionNum)
+//		case protocol.Client2ServerKey_DeleteTopic:
+//			response = c.broker.deleteTopic2(client2ServerData.Topic)
+//		case protocol.Client2ServerKey_GetPublisherPartition:
+//			response = c.broker.getPublisherPartition(client2ServerData.Topic)
+//		case protocol.Client2ServerKey_GetConsumerPartition:
+//			response = c.broker.getConsumerPartition(client2ServerData.GroupName, c.id)
+//		case protocol.Client2ServerKey_SubscribePartion:
+//			response = c.broker.subscribePartition(client2ServerData.Partition, client2ServerData.GroupName, c.id, client2ServerData.RebalanceId)
+//		case protocol.Client2ServerKey_SubscribeTopic:
+//			response = c.broker.subscribeTopic(client2ServerData.Topic, client2ServerData.GroupName, c.id)
+//		case protocol.Client2ServerKey_RegisterConsumer:
+//			response = c.broker.registerConsumer(client2ServerData.GroupName, c.id)
+//		case protocol.Client2ServerKey_UnRegisterConsumer:
+//			response = c.broker.unRegisterConsumer(client2ServerData.GroupName, c.id)
+//		case protocol.Client2ServerKey_Publish:
+//			response = c.publish(client2ServerData.Partition, client2ServerData.Msg)
+//			//continue
+//		case protocol.Client2ServerKey_CommitReadyNum://readyCount提交
+//			c.changeReadyNum <- client2ServerData.ReadyNum //修改readyCount
+//			//continue
+//		case protocol.Client2ServerKey_ConsumeSuccess:
+//			c.changeReadyNum <- -1 //修改readyCount++,如果客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
+//			response = c.consumeSuccess(client2ServerData.Partition, client2ServerData.GroupName, client2ServerData.MsgId)
+//			//continue
+//		default:
+//			myLogger.Logger.Print("cannot find key")
+//			//c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
+//		}
+//
+//		if response != nil{
+//			c.writeCmdChan <- response
+//		}
+//
+//	}
+//}
+//
 func (c *client)readLoop() {
 	for{
 		myLogger.Logger.Print("readLoop")
-		tmp := make([]byte, 4)
-		_, err := io.ReadFull(c.reader, tmp) //读取长度
+		//tmp := make([]byte, 4)
+		//_, err := io.ReadFull(c.reader, tmp) //读取长度
+		//if err != nil {
+		//	if err == io.EOF {
+		//		myLogger.Logger.Print("EOF")
+		//	} else {
+		//		myLogger.Logger.Print(err)
+		//	}
+		//	c.exitChan <- "bye"
+		//	break
+		//}
+		//len := int32(binary.BigEndian.Uint32(tmp))
+		//myLogger.Logger.Printf("readLen %d ", len)
+		//requestData := make([]byte, len)
+		//_, err = io.ReadFull(c.reader, requestData) //读取内容
+		//if err != nil {
+		//	if err == io.EOF {
+		//		myLogger.Logger.Print("EOF")
+		//	} else {
+		//		myLogger.Logger.Print(err)
+		//	}
+		//	c.exitChan <- "bye"
+		//	break
+		//}
+		//client2ServerData := &protocol.Client2Server{}
+		//err = proto.Unmarshal(requestData, client2ServerData)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("Unmarshal error %s", err)
+		//}else{
+		//	myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
+		//}
+
+		cmd, msgBody, err := protocalFuc.ReadAndUnPackClientServerProtoBuf(c.reader)
 		if err != nil {
 			if err == io.EOF {
 				myLogger.Logger.Print("EOF")
@@ -238,113 +377,183 @@ func (c *client)readLoop() {
 			c.exitChan <- "bye"
 			break
 		}
-		len := int32(binary.BigEndian.Uint32(tmp))
-		myLogger.Logger.Printf("readLen %d ", len)
-		requestData := make([]byte, len)
-		_, err = io.ReadFull(c.reader, requestData) //读取内容
-		if err != nil {
-			if err == io.EOF {
-				myLogger.Logger.Print("EOF")
-			} else {
-				myLogger.Logger.Print(err)
+
+		var response []byte
+		switch *cmd {
+		case protocol.ClientServerCmd_CmdCreatTopicReq:
+			creatTopicReq := &protocol.CreatTopicReq{}
+			err = proto.Unmarshal(msgBody, creatTopicReq) //得到包头
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive creatTopicReq: %s", creatTopicReq)
 			}
-			c.exitChan <- "bye"
-			break
-		}
-		client2ServerData := &protocol.Client2Server{}
-		err = proto.Unmarshal(requestData, client2ServerData)
-		if err != nil {
-			myLogger.Logger.PrintError("Unmarshal error %s", err)
-		}else{
-			myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
-		}
-		var response *protocol.Server2Client
-		switch client2ServerData.Key {
-		//case protocol.Client2ServerKey_CreatTopic:
-		//	response = c.broker.creatTopic(client2ServerData)
-		//case protocol.Client2ServerKey_GetPublisherPartition:
-		//	response = b.getPublisherPartition(data)
-		//case protocol.Client2ServerKey_GetConsumerPartition:
-		//	response = b.getConsumerPartition(data)
-		//case protocol.Client2ServerKey_SubscribePartion:
-		//	response = b.subscribePartition(data)
-		//case protocol.Client2ServerKey_SubscribeTopic:
-		//	response = b.subscribeTopic(data)
-		//case protocol.Client2ServerKey_RegisterConsumer:
-		//	response = b.registerConsumer(data)
-		//case protocol.Client2ServerKey_UnRegisterConsumer:
-		//	response = b.unRegisterConsumer(data)
-		case protocol.Client2ServerKey_Publish:
-			response = c.publish(client2ServerData)
-			if response != nil{
-				c.writeCmdChan <- response
+			response = c.broker.creatTopic(creatTopicReq.TopicName, creatTopicReq.PartitionNum)
+		case protocol.ClientServerCmd_CmdDeleteTopicReq:
+			deleteTopicReq := &protocol.DeleteTopicReq{}
+			err = proto.Unmarshal(msgBody, deleteTopicReq) //得到包头
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive creatTopicReq: %s", deleteTopicReq)
 			}
-			//continue
-		case protocol.Client2ServerKey_CommitReadyNum://readyCount提交
-			c.changeReadyNum <- client2ServerData.ReadyNum //修改readyCount
-			//continue
-		case protocol.Client2ServerKey_ConsumeSuccess:
+			response = c.broker.deleteTopic2(deleteTopicReq.TopicName)
+		case protocol.ClientServerCmd_CmdGetPublisherPartitionReq:
+			req := &protocol.GetPublisherPartitionReq{}
+			err = proto.Unmarshal(msgBody, req) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive GetPublisherPartitionReq: %s", req)
+			}
+			response = c.broker.getPublisherPartition(req.TopicName)
+		case protocol.ClientServerCmd_CmdGetConsumerPartitionReq:
+			req := &protocol.GetConsumerPartitionReq{}
+			err = proto.Unmarshal(msgBody, req) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive GetConsumerPartitionReq: %s", req)
+			}
+			response = c.broker.getConsumerPartition(req.GroupName, c.id)
+		case protocol.ClientServerCmd_CmdSubscribePartitionReq:
+			req := &protocol.SubscribePartitionReq{}
+			err = proto.Unmarshal(msgBody, req) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive SubscribePartitionReq: %s", req)
+			}
+			response = c.broker.subscribePartition(req.PartitionName, req.GroupName, c.id, req.RebalanceId)
+		case protocol.ClientServerCmd_CmdSubscribeTopicReq:
+			req := &protocol.SubscribeTopicReq{}
+			err = proto.Unmarshal(msgBody, req) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive SubscribeTopicReq: %s", req)
+			}
+			response = c.broker.subscribeTopic(req.TopicName, req.GroupName, c.id)
+		case protocol.ClientServerCmd_CmdRegisterConsumerReq:
+			req := &protocol.RegisterConsumerReq{}
+			err = proto.Unmarshal(msgBody, req) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive RegisterConsumerReq: %s", req)
+			}
+			response = c.broker.registerConsumer(req.GroupName, c.id)
+		case protocol.ClientServerCmd_CmdUnRegisterConsumerReq:
+			req := &protocol.UnRegisterConsumerReq{}
+			err = proto.Unmarshal(msgBody, req) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive UnRegisterConsumerReq: %s", req)
+			}
+			response = c.broker.unRegisterConsumer(req.GroupName, c.id)
+		case protocol.ClientServerCmd_CmdPublishReq:
+			publishReq := &protocol.PublishReq{}
+			err = proto.Unmarshal(msgBody, publishReq) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive PublishReq: %s", publishReq)
+			}
+			response = c.publish(publishReq.PartitionName, publishReq.Msg)
+		case protocol.ClientServerCmd_CmdCommitReadyNumReq://readyCount提交
+			req := &protocol.CommitReadyNumReq{}
+			err = proto.Unmarshal(msgBody, req) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive CommitReadyNumReq: %s", req)
+			}
+			c.changeReadyNum <- req.ReadyNum //修改readyCount
+		case protocol.ClientServerCmd_CmdPushMsgRsp:
 			c.changeReadyNum <- -1 //修改readyCount++,如果客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
-			response = c.consumeSuccess(client2ServerData)
-			if response != nil{
-				c.writeCmdChan <- response
+
+			rsp := &protocol.PushMsgRsp{}
+			err = proto.Unmarshal(msgBody, rsp) //得到消息体
+			if err != nil {
+				myLogger.Logger.PrintError("Unmarshal error %s", err)
+				continue
+			}else{
+				myLogger.Logger.Printf("receive PushMsgRsp: %s", rsp)
 			}
-			//continue
+			response = c.consumeSuccess(rsp.PartitionName, rsp.GroupName, rsp.MsgId)
 		default:
-			c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
+			myLogger.Logger.Print("cannot find key")
+			//c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
+		}
+		if response != nil{
+			c.writeCmdChan <- response
 		}
 
 
-		//if client2ServerData.Key == protocol.Client2ServerKey_CommitReadyNum{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
-		//	c.changeReadyNum <- client2ServerData.ReadyNum //修改readyCount
-		//	continue
-		//}
-		//if client2ServerData.Key == protocol.Client2ServerKey_ConsumeSuccess{//如果向客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
-		//	c.changeReadyNum <- -1 //修改readyCount++
-		//	response := c.consumeSuccess(client2ServerData)
-		//	if response != nil{
-		//		c.writeCmdChan <- response
+		//mes, err := protocalFuc.UnPackClientServer(c.reader)
+		//if err != nil {
+		//	if err == io.EOF {
+		//		myLogger.Logger.Print("EOF")
+		//	} else {
+		//		myLogger.Logger.Print(err)
 		//	}
-		//	continue
+		//	c.exitChan <- "bye"
+		//	break
 		//}
-		//if client2ServerData.Key == protocol.Client2ServerKey_Publish{//readyCount提交，则客户端目前可接受的数据量readyCount应该加1
-		//	response := c.publish(client2ServerData)
-		//	if response != nil{
-		//		c.writeCmdChan <- response
-		//	}
-		//	continue
-		//}
-		//c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
-
-		//var response *protocol.Server2Client
-		//switch request.Key {
+		//client2ServerData := mes.(*protocol.Client2Server)
+		//var response []byte
+		//switch client2ServerData.Key {
 		//case protocol.Client2ServerKey_CreatTopic:
-		//	response = c.creatTopic(request)
+		//	response = c.broker.creatTopic(client2ServerData.Topic, client2ServerData.PartitionNum)
+		//case protocol.Client2ServerKey_DeleteTopic:
+		//	response = c.broker.deleteTopic2(client2ServerData.Topic)
 		//case protocol.Client2ServerKey_GetPublisherPartition:
-		//	response = c.getPublisherPartition(request)
-		//case protocol.Client2ServerKey_Publish:
-		//	response = c.publish(request)
+		//	response = c.broker.getPublisherPartition(client2ServerData.Topic)
 		//case protocol.Client2ServerKey_GetConsumerPartition:
-		//	response = c.getConsumerPartition(request)
+		//	response = c.broker.getConsumerPartition(client2ServerData.GroupName, c.id)
 		//case protocol.Client2ServerKey_SubscribePartion:
-		//	response = c.subscribePartition(request)
+		//	response = c.broker.subscribePartition(client2ServerData.Partition, client2ServerData.GroupName, c.id, client2ServerData.RebalanceId)
 		//case protocol.Client2ServerKey_SubscribeTopic:
-		//	response = c.subscribeTopic(request)
+		//	response = c.broker.subscribeTopic(client2ServerData.Topic, client2ServerData.GroupName, c.id)
 		//case protocol.Client2ServerKey_RegisterConsumer:
-		//	response = c.registerConsumer(request)
+		//	response = c.broker.registerConsumer(client2ServerData.GroupName, c.id)
 		//case protocol.Client2ServerKey_UnRegisterConsumer:
-		//	response = c.unRegisterConsumer(request)
+		//	response = c.broker.unRegisterConsumer(client2ServerData.GroupName, c.id)
+		//case protocol.Client2ServerKey_Publish:
+		//	response = c.publish(client2ServerData.Partition, client2ServerData.Msg)
+		//	//continue
+		//case protocol.Client2ServerKey_CommitReadyNum://readyCount提交
+		//	c.changeReadyNum <- client2ServerData.ReadyNum //修改readyCount
+		//	//continue
+		//case protocol.Client2ServerKey_ConsumeSuccess:
+		//	c.changeReadyNum <- -1 //修改readyCount++,如果客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
+		//	response = c.consumeSuccess(client2ServerData.Partition, client2ServerData.GroupName, client2ServerData.MsgId)
+		//	//continue
 		//default:
-		//	myLogger.Logger.Print("cannot find key");
+		//	myLogger.Logger.Print("cannot find key")
+		//	//c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
 		//}
+		//
 		//if response != nil{
-		//	c.sendResponse(response)
+		//	c.writeCmdChan <- response
 		//}
+
 	}
 }
 
-func (c *client)  consumeSuccess(client2ServerData *protocol.Client2Server)   (response *protocol.Server2Client) {
-	partitionName := client2ServerData.Partition
+func (c *client)  consumeSuccess(partitionName string, groupName string, msgId int32)   (response []byte) {
+	//partitionName := client2ServerData.Partition
 
 	c.broker.partitionMapLock.RLock()
 	defer c.broker.partitionMapLock.RUnlock()
@@ -352,15 +561,20 @@ func (c *client)  consumeSuccess(client2ServerData *protocol.Client2Server)   (r
 	partition, ok := c.broker.getPartition(&partitionName)
 	if !ok {
 		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-		response = &protocol.Server2Client{
+		Server2Client := &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_TopicNotExisted,
+		}
+		response, err := proto.Marshal(Server2Client)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error: ", err)
+			return nil
 		}
 		return response
 	}else {
 		//myLogger.Logger.Printf("publish msg : %s", msg.String())
 		msgAskData := &msgAskData{
-			msgId: client2ServerData.MsgId,
-			groupName: client2ServerData.GroupName,
+			msgId: msgId,
+			groupName: groupName,
 		}
 		partition.msgAskChan <- msgAskData
 		//response = &protocol.Server2Client{
@@ -370,16 +584,22 @@ func (c *client)  consumeSuccess(client2ServerData *protocol.Client2Server)   (r
 	}
 }
 
-func (c *client)  publish(client2ServerData *protocol.Client2Server)  (response *protocol.Server2Client) {
-	partitionName := client2ServerData.Partition
-	msg := client2ServerData.Msg
+func (c *client)  publish(partitionName string, msg *protocol.Message)  (response []byte) {
+	//partitionName := client2ServerData.Partition
+	//msg := client2ServerData.Msg
 	c.broker.partitionMapLock.RLock()
 	defer c.broker.partitionMapLock.RUnlock()
 	partition, ok := c.broker.getPartition(&partitionName)
 	if !ok {
 		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-		response = &protocol.Server2Client{
+		Server2Client := &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_TopicNotExisted,
+		}
+
+		response, err := proto.Marshal(Server2Client)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error: ", err)
+			return nil
 		}
 		return response
 	}else{

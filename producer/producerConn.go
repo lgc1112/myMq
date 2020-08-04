@@ -72,15 +72,15 @@ func (p *producerConn)readResponse() (*protocol.Server2Client, error){
 
 func (p *producerConn)Write(data []byte) (error){
 
-	var buf [4]byte
-	bufs := buf[:]
-	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	_, err := p.writer.Write(bufs)
-	if err != nil {
-		//myLogger.Logger.PrintError("writer error: ", err)
-		return err
-	}
-	_, err = p.writer.Write(data)
+	//var buf [4]byte
+	//bufs := buf[:]
+	//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+	//_, err := p.writer.Write(bufs)
+	//if err != nil {
+	//	//myLogger.Logger.PrintError("writer error: ", err)
+	//	return err
+	//}
+	_, err := p.writer.Write(data)
 	if err != nil {
 		//myLogger.Logger.PrintError("writer error: ", err)
 		return err

@@ -3,6 +3,7 @@ package broker
 import (
 	"../mylib/myLogger"
 	"../protocol"
+	"github.com/golang/protobuf/proto"
 	"math"
 	"sync"
 )
@@ -17,7 +18,7 @@ type partition struct {
 
 	broker *Broker
 	msgChan     chan *protocol.Message
-	responseChan chan *protocol.Server2Client
+	responseChan chan []byte //*protocol.Server2Client
 	msgAskChan     chan *msgAskData
 	//exitFinishedChan chan string
 	exitChan chan string
@@ -52,7 +53,7 @@ func newPartition(name string, addr string, isNativePartiton bool, broker *Broke
 		broker: broker,
 		isNativePartition:isNativePartiton,
 		msgChan : make(chan *protocol.Message, msgChanSize),
-		responseChan: make(chan *protocol.Server2Client),
+		responseChan: make(chan []byte),
 		subscribedGroups: make(map[string] *subscribedGroup),
 		//exitFinishedChan: make(chan string),
 		msgAskChan: make(chan *msgAskData),
@@ -66,7 +67,7 @@ func newPartition(name string, addr string, isNativePartiton bool, broker *Broke
 	//go partition.readLoop()
 	return partition
 }
-func (p *partition) Put(msg *protocol.Message) *protocol.Server2Client{
+func (p *partition) Put(msg *protocol.Message) []byte{
 	if !p.isNativePartition {
 		myLogger.Logger.PrintWarning("try to put msg to not native partition")
 		return nil
@@ -126,7 +127,12 @@ func (p *partition) readLoop()  {
 						response := &protocol.Server2Client{
 							Key: protocol.Server2ClientKey_PriorityQueueFull,
 						}
-						p.responseChan <- response
+						data, err := proto.Marshal(response)
+						if err != nil {
+							myLogger.Logger.PrintError("marshaling error: ", err)
+							continue
+						}
+						p.responseChan <- data
 						goto OuterLoop
 					}
 				}
@@ -139,7 +145,12 @@ func (p *partition) readLoop()  {
 			response := &protocol.Server2Client{
 				Key: protocol.Server2ClientKey_PublishSuccess,
 			}
-			p.responseChan <- response
+			data, err := proto.Marshal(response)
+			if err != nil {
+				myLogger.Logger.PrintError("marshaling error: ", err)
+				continue
+			}
+			p.responseChan <- data
 			p.subscribedGroupsLock.RUnlock()
 		}
 	}

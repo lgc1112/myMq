@@ -171,9 +171,9 @@ func (g *subscribedGroup) popInflightMsg(msgId int32) error{
 func (g *subscribedGroup) writeLoop()  {
 	var msg *protocol.InternalMessage
 	var preparedMsgChan chan *protocol.InternalMessage
-	var consumerChan chan *protocol.Server2Client
-	var curConsumerChan chan *protocol.Server2Client
-	var pushMsg *protocol.Server2Client
+	var consumerChan chan []byte
+	var curConsumerChan chan []byte
+	var pushMsg []byte
 	retryTicker := time.NewTicker(retryTime) //定时检查inflightQ是否超时
 	retryTickerChan := retryTicker.C
 	for{
@@ -219,7 +219,7 @@ func (g *subscribedGroup) writeLoop()  {
 				continue
 			}
 			myLogger.Logger.Printf("subscribedGroup %s readMsg %s", g.name, string(msg.Msg))
-			pushMsg = &protocol.Server2Client{ //封装
+			tmp := &protocol.Server2Client{ //封装
 				Key: protocol.Server2ClientKey_PushMsg,
 				MsgGroupName: g.name,
 				MsgPartitionName: g.partitionName,
@@ -228,6 +228,12 @@ func (g *subscribedGroup) writeLoop()  {
 					Priority: msg.Priority,
 					Msg: msg.Msg,
 				},
+			}
+			var err error
+			pushMsg, err = proto.Marshal(tmp)
+			if err != nil {
+				myLogger.Logger.PrintError("marshaling error: ", err)
+				continue
 			}
 			preparedMsgChan = nil //读到数据，阻塞这里，等待pushMsg通过 consumerChan发送到消费者
 			curConsumerChan = consumerChan
@@ -258,6 +264,7 @@ func (g *subscribedGroup) writeLoop()  {
 				//inflightMes.Timeout = now.Add(retryTime).UnixNano() //设置超时时间
 				//myLogger.Logger.PrintDebug( inflightMes.Timeout ,retryTime)
 				if inflightMes.TryTimes > int32(MaxTryTime) {//重传太多次了，不传了，输出警告
+					g.popInflightMsg(inflightMes.Id)
 					myLogger.Logger.PrintWarning("intflightQueue try too many times :", inflightMes.TryTimes)
 					continue
 				}

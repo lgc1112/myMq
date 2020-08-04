@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"github.com/golang/protobuf/proto"
 	"sync"
 	"../mylib/myLogger"
 	"../protocol"
@@ -144,10 +145,15 @@ func (g *group)notifyClients()  {
 	g.clientsLock.Lock()
 	defer g.clientsLock.Unlock()
 	for _, client := range g.clients{
-		response := &protocol.Server2Client{
+		tmp := &protocol.Server2Client{
 			Key: protocol.Server2ClientKey_ChangeConsumerPartition,
 			Partitions: g.client2PartitionMap[client.id],
 			RebalanceId: g.rebalanceID,
+		}
+		response, err := proto.Marshal(tmp)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error: ", err)
+			return
 		}
 		select {
 		case client.writeCmdChan <- response:

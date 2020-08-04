@@ -3,8 +3,10 @@ package consumer
 import (
 	"../mylib/etcdClient"
 	"../mylib/myLogger"
+	"../mylib/protocalFuc"
 	"../protocol"
 	"errors"
+	"github.com/golang/protobuf/proto"
 	"sync"
 )
 const logDir string = "./consumer/log/"
@@ -29,13 +31,7 @@ type readData struct {
 type Handler interface {
 	ProcessMsg(message *protocol.Server2Client)
 }
-//
-//type HandlerFunc func(message *protocol.Server2Client) error
-//
-//
-//func (h HandlerFunc) processMsg(m *protocol.Server2Client) error {
-//	return h(m)
-//}
+
 
 
 func NewConsumer(addr []string, groupName string) (*Consumer, error) {
@@ -59,6 +55,8 @@ func NewConsumer(addr []string, groupName string) (*Consumer, error) {
 			myLogger.Logger.PrintError(err)
 			return nil, err
 		}
+	}else{
+		err = c.Connect2Brokers()
 	}
 	return c, err
 }
@@ -153,12 +151,35 @@ func (c *Consumer) Connect2Broker(addr string) error {
 
 func (c *Consumer) SubscribeTopic(topicName string) error {
 	c.topic = topicName
-	requestData := &protocol.Client2Server{
-		Key:       protocol.Client2ServerKey_SubscribeTopic,
-		Topic:     topicName,
+	requestData := &protocol.SubscribeTopicReq{
+		TopicName: topicName,
 		GroupName: c.groupName,
 	}
-	c.controllerConn.Put(requestData)
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribeTopicReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+	myLogger.Logger.Printf("write: %s", requestData)
+	c.controllerConn.Put(reqData)
+	if err != nil {
+		myLogger.Logger.PrintError("controllerConn Write err", err)
+		return err
+	}
+
+
+	//c.topic = topicName
+	//requestData := &protocol.Client2Server{
+	//	Key:       protocol.Client2ServerKey_SubscribeTopic,
+	//	Topic:     topicName,
+	//	GroupName: c.groupName,
+	//}
+	//c.controllerConn.Put(requestData)
 	//c.controllerConn.writeChan <- requestData
 	myLogger.Logger.Printf("subscribeTopic %s : %s", topicName, requestData)
 	return nil
@@ -168,15 +189,43 @@ func (c *Consumer) CommitReadyNum(num int32) error {
 	c.brokerConnMapLock.RLock()
 	defer c.brokerConnMapLock.RUnlock()
 	if len(c.brokerConnMap) == 0{
-		return errors.New("donnot have any brokerConn")
+		return errors.New("do not have any brokerConn")
 	}
-	requestData := &protocol.Client2Server{
-		Key: protocol.Client2ServerKey_CommitReadyNum,
+
+
+	requestData := &protocol.CommitReadyNumReq{
 		ReadyNum: num / int32(len(c.brokerConnMap)),
 	}
-	for _, brokerConn := range c.brokerConnMap{
-		brokerConn.Put(requestData)
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
 	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCommitReadyNumReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+
+	c.brokerConnMapLock.RLock()
+	for _, brokerConn := range c.brokerConnMap{
+		myLogger.Logger.Printf("write: %s", requestData)
+		err = brokerConn.Put(reqData)
+		if err != nil {
+			myLogger.Logger.PrintError("controllerConn Write err", err)
+			return err
+		}
+	}
+	c.brokerConnMapLock.RUnlock()
+	//requestData := &protocol.Client2Server{
+	//	Key: protocol.Client2ServerKey_CommitReadyNum,
+	//	ReadyNum: num / int32(len(c.brokerConnMap)),
+	//}
+
+
+	//for _, brokerConn := range c.brokerConnMap{
+	//	brokerConn.Put(requestData)
+	//}
 
 	myLogger.Logger.Print("commitReadyNum", requestData)
 	return nil
@@ -192,19 +241,38 @@ func (c *Consumer) ReadLoop(handler Handler) {
 			myLogger.Logger.Print("readLoop")
 
 			server2ClientData := data.server2ClientData
-			var response *protocol.Client2Server
+			var response []byte
 			switch server2ClientData.Key {
 			case protocol.Server2ClientKey_PushMsg:
 				if handler == nil{//为空则使用默认处理
 					response = c.processMsg(server2ClientData)
 				}else{//否则使用传入参数处理
 					handler.ProcessMsg(server2ClientData)
-					response = &protocol.Client2Server{
-						Key: protocol.Client2ServerKey_ConsumeSuccess,
-						Partition: server2ClientData.MsgPartitionName,
+
+					rsp := &protocol.PushMsgRsp{
+						PartitionName: server2ClientData.MsgPartitionName,
 						GroupName: server2ClientData.MsgGroupName,
 						MsgId: server2ClientData.Msg.Id,
 					}
+					data, err := proto.Marshal(rsp)
+					if err != nil {
+						myLogger.Logger.PrintError("marshaling error", err)
+						continue
+					}
+					reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
+					if err != nil {
+						myLogger.Logger.PrintError("marshaling error", err)
+						continue
+					}
+					myLogger.Logger.Printf("write: %s", rsp)
+					response = reqData
+
+					//response = &protocol.Client2Server{
+					//	Key: protocol.Client2ServerKey_ConsumeSuccess,
+					//	Partition: server2ClientData.MsgPartitionName,
+					//	GroupName: server2ClientData.MsgGroupName,
+					//	MsgId: server2ClientData.Msg.Id,
+					//}
 				}
 			case protocol.Server2ClientKey_ChangeConsumerPartition:
 				response = c.changeConsumerPartition(server2ClientData)
@@ -229,36 +297,71 @@ func (c *Consumer) ReadLoop(handler Handler) {
 }
 
 
-func (c *Consumer) processMsg(data *protocol.Server2Client) (*protocol.Client2Server){
+func (c *Consumer) processMsg(data *protocol.Server2Client) ([]byte){
 	myLogger.Logger.Print("Consumer receive data:", data.Msg.Msg)
-	response := &protocol.Client2Server{
-		Key: protocol.Client2ServerKey_ConsumeSuccess,
-		Partition: data.MsgPartitionName,
+
+	rsp := &protocol.PushMsgRsp{
+		PartitionName: data.MsgPartitionName,
 		GroupName: data.MsgGroupName,
 		MsgId: data.Msg.Id,
 	}
-	return response
+	data2, err := proto.Marshal(rsp)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return nil
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data2)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return nil
+	}
+	//response = reqData
+
+	//response := &protocol.Client2Server{
+	//	Key: protocol.Client2ServerKey_ConsumeSuccess,
+	//	Partition: data.MsgPartitionName,
+	//	GroupName: data.MsgGroupName,
+	//	MsgId: data.Msg.Id,
+	//}
+	myLogger.Logger.Printf("write: %s", rsp)
+	return reqData
 }
-func (c *Consumer) changeConsumerPartition(data *protocol.Server2Client) (*protocol.Client2Server){
+func (c *Consumer) changeConsumerPartition(data *protocol.Server2Client) ([]byte){
 	myLogger.Logger.Print("changeConsumerPartition:", data.Partitions)
 	c.partitions = data.Partitions
 	c.subscribePartion(data.RebalanceId)
 	return nil
 }
 
+
 func (c *Consumer) subscribePartion(rebalanceId int32) error{
 	myLogger.Logger.Print("subscribePartion len:", len(c.partitions))
 	for _, partition := range c.partitions{
-		requestData := &protocol.Client2Server{
-			Key: protocol.Client2ServerKey_SubscribePartion,
-			//Topic: partition.TopicName,
-			Partition:   partition.Name,
-			GroupName:   c.groupName,
+		requestData := &protocol.SubscribePartitionReq{
+			PartitionName: partition.Name,
+			GroupName: c.groupName,
 			RebalanceId: rebalanceId,
 		}
+		data, err := proto.Marshal(requestData)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return err
+		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribePartitionReq, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return err
+		}
+		//requestData := &protocol.Client2Server{
+		//	Key: protocol.Client2ServerKey_SubscribePartion,
+		//	//Topic: partition.TopicName,
+		//	Partition:   partition.Name,
+		//	GroupName:   c.groupName,
+		//	RebalanceId: rebalanceId,
+		//}
 		conn, ok := c.getBrokerConn(&partition.Addr)
 		if ok {
-			myLogger.Logger.Print("subscribePartion success", requestData)
+			myLogger.Logger.Print("getBrokerConn success", partition.Addr)
 		}else{
 			err := c.Connect2Broker(partition.Addr)
 			if err != nil {
@@ -269,7 +372,8 @@ func (c *Consumer) subscribePartion(rebalanceId int32) error{
 			myLogger.Logger.Print("subscribePartion have not connect", partition.Addr)
 		}
 
-		err := conn.Put(requestData)
+		myLogger.Logger.Printf("write: %s", requestData)
+		err = conn.Put(reqData)
 		if err != nil {
 			myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
 			continue
@@ -279,4 +383,38 @@ func (c *Consumer) subscribePartion(rebalanceId int32) error{
 	return nil
 
 }
+
+//func (c *Consumer) subscribePartion(rebalanceId int32) error{
+//	myLogger.Logger.Print("subscribePartion len:", len(c.partitions))
+//	for _, partition := range c.partitions{
+//		requestData := &protocol.Client2Server{
+//			Key: protocol.Client2ServerKey_SubscribePartion,
+//			//Topic: partition.TopicName,
+//			Partition:   partition.Name,
+//			GroupName:   c.groupName,
+//			RebalanceId: rebalanceId,
+//		}
+//		conn, ok := c.getBrokerConn(&partition.Addr)
+//		if ok {
+//			myLogger.Logger.Print("subscribePartion success", requestData)
+//		}else{
+//			err := c.Connect2Broker(partition.Addr)
+//			if err != nil {
+//				myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+//				continue
+//			}
+//			conn, _ = c.getBrokerConn(&partition.Addr)
+//			myLogger.Logger.Print("subscribePartion have not connect", partition.Addr)
+//		}
+//
+//		err := conn.Put(requestData)
+//		if err != nil {
+//			myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+//			continue
+//		}
+//		//conn.writeChan <- requestData
+//	}
+//	return nil
+//
+//}
 

@@ -1,0 +1,198 @@
+syntax = "proto3";
+import "message.proto";
+package protocol;
+
+message ClientServerHeader{
+  ClientServerCmd cmd = 1;
+  int32 msgLen = 2;
+}
+
+enum ClientServerCmd{
+  CmdCreatTopicReq = 0;
+  CmdCreatTopicRsp = 1;
+
+  CmdDeleteTopicReq = 2;
+  CmdDeleteTopicRsp = 3;
+
+  CmdGetPublisherPartitionReq  = 4;
+  CmdGetPublisherPartitionRsp  = 5;
+
+  CmdPublishReq = 6;
+  CmdPublishRsp = 7;
+
+  CmdGetConsumerPartitionReq = 8;
+  CmdGetConsumerPartitionRsp = 9;
+
+  CmdSubscribePartitionReq = 10;
+  CmdSubscribePartitionRsp = 11;
+
+  CmdSubscribeTopicReq = 12;
+  CmdSubscribeTopicRsp = 13;
+
+  CmdRegisterConsumerReq = 14;
+  CmdRegisterConsumerRsp = 15;
+
+  CmdUnRegisterConsumerReq = 16;
+  CmdUnRegisterConsumerRsp = 17;
+
+  CmdCommitReadyNumReq = 20;
+  CmdCommitReadyNumRsp = 21;
+
+
+  CmdChangeConsumerPartitionReq = 22;
+  CmdChangeConsumerPartitionRsp = 23;
+
+  CmdPushMsgReq = 24;
+  CmdPushMsgRsp = 25;
+
+}
+
+
+
+message CreatTopicReq{
+  string TopicName = 1;
+  int32 PartitionNum = 2;
+}
+
+message CreatTopicRsp{
+  RetStatus ret = 1;
+  repeated Partition Partitions = 2;
+}
+
+message DeleteTopicReq{
+  string TopicName = 1;
+}
+
+message DeleteTopicRsp{
+  RetStatus ret = 1;
+}
+
+
+message PublishReq{
+  string PartitionName = 1;
+  Message msg = 2;
+}
+
+message PublishRsp{
+  RetStatus ret = 1;
+}
+
+message GetPublisherPartitionReq{
+  string TopicName= 1;
+}
+
+message GetPublisherPartitionRsp{
+  RetStatus ret = 1;
+  repeated Partition Partitions = 2;
+}
+
+message GetConsumerPartitionReq{
+  string TopicName= 1;
+  string GroupName = 2;
+}
+
+message GetConsumerPartitionRsp{
+  RetStatus ret = 1;
+  repeated Partition Partitions = 2;
+}
+
+message SubscribePartitionReq{
+  string PartitionName = 1;
+  string GroupName = 2;
+  int32 RebalanceId = 3;
+}
+
+message SubscribePartitionRsp{
+  RetStatus ret = 1;
+}
+
+message SubscribeTopicReq{
+  string GroupName = 1;
+  string TopicName = 2;
+}
+
+message SubscribeTopicRsp{
+  RetStatus ret = 1;
+}
+
+message RegisterConsumerReq{
+  string GroupName = 1;
+}
+
+message RegisterConsumerRsp{
+  RetStatus ret = 1;
+}
+
+message UnRegisterConsumerReq{
+  string GroupName = 1;
+}
+
+message UnRegisterConsumerRsp{
+  RetStatus ret = 1;
+}
+
+message CommitReadyNumReq{
+  int32 ReadyNum = 1;
+}
+
+message CommitReadyNumReqRsp{
+  RetStatus ret = 1;
+}
+
+
+
+message ChangeConsumerPartitionReq{
+  repeated Partition Partitions = 1;
+  int32 RebalanceId = 2;
+}
+
+message ChangeConsumerPartitionRsp{
+  RetStatus ret = 1;
+}
+
+message PushMsgReq{
+  string PartitionName = 1;
+  Message msg = 2;
+}
+
+message PushMsgRsp{
+  RetStatus ret = 1;
+  string PartitionName = 2;
+  int32 MsgId = 3;
+  string GroupName = 4;
+}
+
+
+//message CreatTopicReqInfo{
+//  RetStatus ret = 1;
+//  int32 PartitionNum = 2;
+//}
+
+
+//enum Client2ServerKey
+//{
+//  CreatTopic = 0;
+//  GetPublisherPartition  = 1;
+//  Publish = 2;
+//  GetConsumerPartition = 3;
+//  SubscribePartion = 4;
+//  SubscribeTopic = 5;
+//  RegisterConsumer = 6;
+//  UnRegisterConsumer = 7;
+//  ConsumeSuccess = 8;
+//  CommitReadyNum = 9;
+//  DeleteTopic = 10;
+//};
+
+// this is a comment
+//message Client2Server {
+//  Client2ServerKey key = 1;
+//  string Topic = 2;
+//  string Partition = 3;
+//  string GroupName = 4;
+//  int32 PartitionNum = 5;
+//  int32 MsgId = 6;
+//  int32 ReadyNum = 7;
+//  Message msg = 8;
+//  int32 RebalanceId = 9;
+//}

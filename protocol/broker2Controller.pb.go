@@ -2,34 +2,6 @@
 // source: broker2Controller.proto
 // DO NOT EDIT!
 
-/*
-Package protocol is a generated protocol buffer package.
-
-It is generated from these files:
-	broker2Controller.proto
-	client2Server.proto
-	controller2Broker.proto
-	message.proto
-	metaData.proto
-	server2Client.proto
-
-It has these top-level messages:
-	Broker2Controller
-	Client2Server
-	CreatTopicRequest
-	CreatTopicResponse
-	GetPublisherPartitionsRequest
-	GetPublisherPartitionsResponse
-	Controller2Broker
-	Message
-	InternalMessage
-	Partition
-	ListenAddr
-	MetaData
-	Topic
-	Group
-	Server2Client
-*/
 package protocol
 
 import proto "github.com/golang/protobuf/proto"
@@ -40,12 +12,6 @@ import math "math"
 var _ = proto.Marshal
 var _ = fmt.Errorf
 var _ = math.Inf
-
-// This is a compile-time assertion to ensure that this generated file
-// is compatible with the proto package it is being compiled against.
-// A compilation error at this line likely means your copy of the
-// proto package needs to be updated.
-const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 
 type Broker2ControllerKey int32
 
@@ -75,7 +41,7 @@ var Broker2ControllerKey_value = map[string]int32{
 func (x Broker2ControllerKey) String() string {
 	return proto.EnumName(Broker2ControllerKey_name, int32(x))
 }
-func (Broker2ControllerKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+func (Broker2ControllerKey) EnumDescriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
 
 type Broker2Controller struct {
 	Key  Broker2ControllerKey `protobuf:"varint,1,opt,name=key,enum=protocol.Broker2ControllerKey" json:"key,omitempty"`
@@ -85,7 +51,7 @@ type Broker2Controller struct {
 func (m *Broker2Controller) Reset()                    { *m = Broker2Controller{} }
 func (m *Broker2Controller) String() string            { return proto.CompactTextString(m) }
 func (*Broker2Controller) ProtoMessage()               {}
-func (*Broker2Controller) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+func (*Broker2Controller) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
 
 func (m *Broker2Controller) GetKey() Broker2ControllerKey {
 	if m != nil {
@@ -106,9 +72,9 @@ func init() {
 	proto.RegisterEnum("protocol.Broker2ControllerKey", Broker2ControllerKey_name, Broker2ControllerKey_value)
 }
 
-func init() { proto.RegisterFile("broker2Controller.proto", fileDescriptor0) }
+func init() { proto.RegisterFile("broker2Controller.proto", fileDescriptor1) }
 
-var fileDescriptor0 = []byte{
+var fileDescriptor1 = []byte{
 	// 219 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x6c, 0x8e, 0xc1, 0x4a, 0xc3, 0x40,
 	0x10, 0x40, 0xdd, 0xb6, 0x88, 0x8e, 0xb4, 0xac, 0xc3, 0xa2, 0xa1, 0x07, 0x29, 0x9e, 0x82, 0x87,

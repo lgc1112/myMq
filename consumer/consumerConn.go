@@ -20,7 +20,7 @@ type consumerConn struct {
 	reader *bufio.Reader
 	//writerLock sync.RWMutex
 	writer *bufio.Writer
-	writeChan     chan *protocol.Client2Server
+	writeChan     chan []byte
 	exitChan chan string
 }
 
@@ -34,7 +34,7 @@ func newConn(addr string, consumer *Consumer)  (*consumerConn, error){
 		conn:conn,
 		reader: bufio.NewReader(conn),
 		writer: bufio.NewWriter(conn),
-		writeChan: make(chan *protocol.Client2Server),
+		writeChan: make(chan []byte),
 		exitChan: make(chan string),
 		consumer: consumer,
 	}
@@ -102,24 +102,27 @@ func (c *consumerConn)readLoop()  {
 }
 
 func (c *consumerConn)writeLoop()  {
-	var request *protocol.Client2Server
+	//var request *protocol.Client2Server
 	for{
 		select {
-		case request = <-c.writeChan:
-			data, err := proto.Marshal(request)
-			if err != nil {
-				myLogger.Logger.Print("marshaling error: ", err)
-				continue
-			}
-			var buf [4]byte
-			bufs := buf[:]
-			binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-			//c.writerLock.Lock()
-			c.writer.Write(bufs)
-			c.writer.Write(data)
+		case request := <-c.writeChan:
+			c.writer.Write(request)
 			c.writer.Flush()
+
+			//data, err := proto.Marshal(request)
+			//if err != nil {
+			//	myLogger.Logger.Print("marshaling error: ", err)
+			//	continue
+			//}
+			//var buf [4]byte
+			//bufs := buf[:]
+			//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
+			////c.writerLock.Lock()
+			//c.writer.Write(bufs)
+			//c.writer.Write(data)
+			//c.writer.Flush()
 			//c.writerLock.Unlock()
-			myLogger.Logger.Printf("write: %s", request)
+			//myLogger.Logger.Printf("write: %s", request)
 		case <- c.exitChan:
 			goto exit
 
@@ -128,7 +131,7 @@ func (c *consumerConn)writeLoop()  {
 	exit:
 		myLogger.Logger.Printf("writeLoop exit:")
 }
-func (c *consumerConn) Put(data *protocol.Client2Server) error{
+func (c *consumerConn) Put(data []byte) error{
 
 	select {
 	case c.writeChan <- data:

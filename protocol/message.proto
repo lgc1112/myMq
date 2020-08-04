@@ -1,6 +1,15 @@
 syntax = "proto3";
 package protocol;
 
+enum RetStatus{
+  Successs = 0;
+  Fail = 1;
+  QueueFull = 2;
+//  TopicExisted = 3;
+//  TopicNotExisted = 4;
+//  PartitionNotExisted = 5;
+}
+
 message Message{
   int32 id = 1;
   int32 priority = 2;
