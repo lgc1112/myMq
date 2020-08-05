@@ -153,6 +153,7 @@ message ChangeConsumerPartitionRsp{
 message PushMsgReq{
   string PartitionName = 1;
   Message msg = 2;
+  string GroupName = 3;
 }
 
 message PushMsgRsp{

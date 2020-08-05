@@ -2,6 +2,7 @@ package broker
 
 import (
 	"../mylib/myLogger"
+	"../mylib/protocalFuc"
 	"../protocol"
 	"container/heap"
 	"container/list"
@@ -186,7 +187,7 @@ func (g *subscribedGroup) writeLoop()  {
 		case tmp := <- g.clientChangeChan:
 			if tmp.isAdd{//添加或修改client
 				g.consumerClient = tmp.client
-				consumerChan = g.consumerClient.writeMsgChan //可以往这边消费者写数据了
+				consumerChan = g.consumerClient.getWriteMsgChan() //可以往这边消费者写数据了
 				if pushMsg == nil{//还没有消息，开始读
 					preparedMsgChan = g.preparedMsgChan
 					curConsumerChan = nil
@@ -219,24 +220,55 @@ func (g *subscribedGroup) writeLoop()  {
 				continue
 			}
 			myLogger.Logger.Printf("subscribedGroup %s readMsg %s", g.name, string(msg.Msg))
-			tmp := &protocol.Server2Client{ //封装
-				Key: protocol.Server2ClientKey_PushMsg,
-				MsgGroupName: g.name,
-				MsgPartitionName: g.partitionName,
+
+
+			tmp := &protocol.PushMsgReq{
+				PartitionName: g.partitionName,
+				GroupName: g.name,
 				Msg: &protocol.Message{
 					Id: msg.Id,
 					Priority: msg.Priority,
 					Msg: msg.Msg,
 				},
 			}
-			var err error
-			pushMsg, err = proto.Marshal(tmp)
+
+
+			data, err := proto.Marshal(tmp)
 			if err != nil {
-				myLogger.Logger.PrintError("marshaling error: ", err)
-				continue
+				myLogger.Logger.PrintError("marshaling error", err)
+				return
 			}
+			pushMsg, err = protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgReq, data)
+			if err != nil {
+				myLogger.Logger.PrintError("PackClientServerProtoBuf error", err)
+				return
+			}
+
 			preparedMsgChan = nil //读到数据，阻塞这里，等待pushMsg通过 consumerChan发送到消费者
 			curConsumerChan = consumerChan
+
+
+
+
+
+			//tmp := &protocol.Server2Client{ //封装
+			//	Key: protocol.Server2ClientKey_PushMsg,
+			//	MsgGroupName: g.name,
+			//	MsgPartitionName: g.partitionName,
+			//	Msg: &protocol.Message{
+			//		Id: msg.Id,
+			//		Priority: msg.Priority,
+			//		Msg: msg.Msg,
+			//	},
+			//}
+			//var err error
+			//pushMsg, err = proto.Marshal(tmp)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("marshaling error: ", err)
+			//	continue
+			//}
+			//preparedMsgChan = nil //读到数据，阻塞这里，等待pushMsg通过 consumerChan发送到消费者
+			//curConsumerChan = consumerChan
 		case curConsumerChan  <- pushMsg:
 			err := g.pushInflightMsg(msg)
 			if err != nil{

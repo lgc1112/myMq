@@ -28,7 +28,7 @@ type Producer struct {
 }
 type readData struct {
 	connName string
-	server2ClientData *protocol.Server2Client
+	//server2ClientData *protocol.Server2Client
 }
 func NewProducer(addrs []string) (*Producer, error) {
 	_, err := myLogger.New(logDir)
@@ -192,14 +192,36 @@ func (p *Producer) DeleteTopic(topic string){
 	//}
 	myLogger.Logger.Printf("DeleteTopic %s ", topic)
 
-	response, err:= p.controllerConn.readResponse()
+
+	cmd, msgBody, err:= p.controllerConn.readResponse()
 	if err != nil {
-		myLogger.Logger.PrintError("controllerConn readResponse err", err)
+		myLogger.Logger.Print(err)
 		return
 	}
-	if response.Key == protocol.Server2ClientKey_Success{
-		delete(p.partitionMap, topic)
+	if *cmd == protocol.ClientServerCmd_CmdDeleteTopicRsp{
+		req := &protocol.DeleteTopicRsp{}
+		err = proto.Unmarshal(msgBody, req) //得到消息体
+		if err != nil {
+			myLogger.Logger.PrintError("Unmarshal error %s", err)
+			return
+		}
+		if req.Ret == protocol.RetStatus_Successs{
+			delete(p.partitionMap, topic)
+		}else{
+			myLogger.Logger.PrintError("cDeleteTopic err", err)
+		}
+
 	}
+	//
+	//
+	//response, err:= p.controllerConn.readResponse()
+	//if err != nil {
+	//	myLogger.Logger.PrintError("controllerConn readResponse err", err)
+	//	return
+	//}
+	//if response.Key == protocol.Server2ClientKey_Success{
+	//	delete(p.partitionMap, topic)
+	//}
 }
 
 func (p *Producer) CreatTopic(topic string, num int32){
@@ -228,12 +250,28 @@ func (p *Producer) CreatTopic(topic string, num int32){
 	}
 	myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
 
-	response, err:= p.controllerConn.readResponse()
-	if err == nil && response.Key == protocol.Server2ClientKey_SendPartions{
-		p.partitionMap[topic] = response.Partitions
+	//response, err:= p.controllerConn.readResponse()
+	//if err == nil && response.Key == protocol.Server2ClientKey_SendPartions{
+	//	p.partitionMap[topic] = response.Partitions
+	//}
+
+	cmd, msgBody, err:= p.controllerConn.readResponse()
+	if err != nil {
+		myLogger.Logger.Print(err)
+		return
 	}
+	if *cmd == protocol.ClientServerCmd_CmdCreatTopicRsp{
+		req := &protocol.CreatTopicRsp{}
+		err = proto.Unmarshal(msgBody, req) //得到消息体
+		if err != nil {
+			myLogger.Logger.PrintError("Unmarshal error %s", err)
+			return
+		}
+		if req.Ret == protocol.RetStatus_Successs{
+			p.partitionMap[topic] = req.Partitions
+		}
 
-
+	}
 
 
 	//requestData := &protocol.Client2Server{
@@ -326,7 +364,7 @@ func (p *Producer) PubilshHelper(topic string, partition *protocol.Partition, ms
 		myLogger.Logger.PrintError("marshaling error", err)
 		return err
 	}
-	err = p.controllerConn.Write(reqData)
+	err = brokerConn.Write(reqData)
 	if err != nil {
 		myLogger.Logger.PrintError("controllerConn Write err", err)
 		return err
@@ -354,17 +392,33 @@ func (p *Producer) PubilshHelper(topic string, partition *protocol.Partition, ms
 	//}
 	////p.conn.conn.Close()
 	//myLogger.Logger.Printf("Pubilsh %s", requestData)
-
-
-	response, err:= brokerConn.readResponse()
-	if err == nil{
-		if response.Key == protocol.Server2ClientKey_PublishSuccess{
-			myLogger.Logger.Print("PublishSuccess")
+	cmd, msgBody, err:= p.controllerConn.readResponse()
+	if *cmd == protocol.ClientServerCmd_CmdGetPublisherPartitionRsp{
+		req := &protocol.PushMsgRsp{}
+		err = proto.Unmarshal(msgBody, req) //得到消息体
+		if err != nil {
+			myLogger.Logger.PrintError("Unmarshal error %s", err)
+			return err
+		}else{
+			myLogger.Logger.Printf("receive GetConsumerPartitionReq: %s", req)
 		}
-	}else{
-		//myLogger.Logger.Print("PublishError")
-		return errors.New("PublishError")
+		if req.Ret == protocol.RetStatus_Successs{
+			myLogger.Logger.Print("PublishSuccess")
+		}else{
+			//myLogger.Logger.Print("PublishError")
+			return errors.New("PublishError")
+		}
 	}
+
+	//response, err:= brokerConn.readResponse()
+	//if err == nil{
+	//	if response.Key == protocol.Server2ClientKey_PublishSuccess{
+	//		myLogger.Logger.Print("PublishSuccess")
+	//	}
+	//}else{
+	//	//myLogger.Logger.Print("PublishError")
+	//	return errors.New("PublishError")
+	//}
 	return nil
 }
 
@@ -416,14 +470,31 @@ func (p *Producer) GetTopicPartition(topic string) error{
 		return err
 	}
 
-	p.controllerConn.writer.Write(reqData)
-	p.controllerConn.writer.Flush()
+	p.controllerConn.conn.Write(reqData)
+	//
+	//p.controllerConn.writer.Flush()
 	myLogger.Logger.Printf("GetTopicPartion %s : %s", topic, requestData)
 
-	response, err:= p.controllerConn.readResponse()
-	if err == nil{
-		p.partitionMap[topic] = response.Partitions
+	cmd, msgBody, err:= p.controllerConn.readResponse()
+	if err != nil {
+		myLogger.Logger.Print(err)
+		return err
 	}
+	if *cmd == protocol.ClientServerCmd_CmdGetPublisherPartitionRsp{
+		req := &protocol.GetPublisherPartitionRsp{}
+		err = proto.Unmarshal(msgBody, req) //得到消息体
+		if err != nil {
+			myLogger.Logger.PrintError("Unmarshal error %s", err)
+			return err
+		}else{
+			myLogger.Logger.Printf("receive GetConsumerPartitionReq: %s", req)
+		}
+		p.partitionMap[topic] = req.Partitions
+	}
+
+	//if err == nil{
+	//	p.partitionMap[topic] = response.Partitions
+	//}
 	return nil
 
 

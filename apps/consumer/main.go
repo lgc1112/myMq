@@ -76,9 +76,9 @@ type myHandle struct {
 	id int
 	receivedNum int64
 }
-func (h myHandle) ProcessMsg(message *protocol.Server2Client){
+func (h myHandle) ProcessMsg(msg *protocol.Message) {
 	atomic.AddInt32(&sum, 1)
-	myLogger.Logger.Printf("Consumer %d receive data is %s:", h.id, string(message.Msg.Msg))
+	myLogger.Logger.Printf("Consumer %d receive data is %s:", h.id, string(msg.Msg))
 }
 
 

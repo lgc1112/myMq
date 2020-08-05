@@ -5,7 +5,6 @@ import (
 	"../mylib/protocalFuc"
 	"../protocol"
 	"bufio"
-	"encoding/binary"
 	"github.com/golang/protobuf/proto"
 	"io"
 	"net"
@@ -73,7 +72,13 @@ func (c *client)clientHandle() {
 	myLogger.Logger.Print("a client leave2")
 }
 
+func (c *client)getWriteMsgChan() chan []byte {
+	return c.writeMsgChan
+}
 
+func (c *client)getWriteCmdChan() chan []byte {
+	return c.writeCmdChan
+}
 func (c *client)clientExit() {
 	//c.isbrokerExitLock1.RLock()
 	if c.isbrokerExit{//如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
@@ -179,15 +184,15 @@ func (c *client) writeLoop() {
 			//}
 
 			//var buf [4]byte
-			bufs :=  make([]byte, 4)
-			binary.BigEndian.PutUint32(bufs, uint32(len(server2ClientData)))
-			_, err := c.writer.Write(bufs)
-			if err != nil {
-				myLogger.Logger.PrintError("writer error: ", err)
-				continue
-			}
+			//bufs :=  make([]byte, 4)
+			//binary.BigEndian.PutUint32(bufs, uint32(len(server2ClientData)))
+			//_, err := c.writer.Write(bufs)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("writer error: ", err)
+			//	continue
+			//}
 
-			_, err = c.writer.Write(server2ClientData)
+			_, err := c.writer.Write(server2ClientData)
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
@@ -219,14 +224,14 @@ func (c *client) writeLoop() {
 			//}
 
 			//var buf [4]byte
-			bufs :=  make([]byte, 4)
-			binary.BigEndian.PutUint32(bufs, uint32(len(server2ClientData)))
-			_, err := c.writer.Write(bufs)
-			if err != nil {
-				myLogger.Logger.PrintError("writer error: ", err)
-				continue
-			}
-			_, err = c.writer.Write(server2ClientData)
+			//bufs :=  make([]byte, 4)
+			//binary.BigEndian.PutUint32(bufs, uint32(len(server2ClientData)))
+			//_, err := c.writer.Write(bufs)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("writer error: ", err)
+			//	continue
+			//}
+			_, err := c.writer.Write(server2ClientData)
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
@@ -560,16 +565,17 @@ func (c *client)  consumeSuccess(partitionName string, groupName string, msgId i
 
 	partition, ok := c.broker.getPartition(&partitionName)
 	if !ok {
-		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-		Server2Client := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicNotExisted,
-		}
-		response, err := proto.Marshal(Server2Client)
-		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
-			return nil
-		}
-		return response
+		return nil
+		//myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
+		//Server2Client := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_TopicNotExisted,
+		//}
+		//response, err := proto.Marshal(Server2Client)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
+		//return response
 	}else {
 		//myLogger.Logger.Printf("publish msg : %s", msg.String())
 		msgAskData := &msgAskData{
@@ -592,15 +598,33 @@ func (c *client)  publish(partitionName string, msg *protocol.Message)  (respons
 	partition, ok := c.broker.getPartition(&partitionName)
 	if !ok {
 		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-		Server2Client := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicNotExisted,
-		}
 
-		response, err := proto.Marshal(Server2Client)
+		rsp := &protocol.PushMsgRsp{
+			Ret: protocol.RetStatus_Fail,
+		}
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+
+		//Server2Client := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_TopicNotExisted,
+		//}
+		//
+		//response, err := proto.Marshal(Server2Client)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 		return response
 	}else{
 		myLogger.Logger.Printf("publish msg : %s", msg.String())

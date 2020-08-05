@@ -1,10 +1,11 @@
 package broker
 
 import (
+	"../mylib/myLogger"
+	"../mylib/protocalFuc"
+	"../protocol"
 	"github.com/golang/protobuf/proto"
 	"sync"
-	"../mylib/myLogger"
-	"../protocol"
 	"sync/atomic"
 	"time"
 )
@@ -145,27 +146,78 @@ func (g *group)notifyClients()  {
 	g.clientsLock.Lock()
 	defer g.clientsLock.Unlock()
 	for _, client := range g.clients{
-		tmp := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_ChangeConsumerPartition,
+
+		req := &protocol.ChangeConsumerPartitionReq{
 			Partitions: g.client2PartitionMap[client.id],
 			RebalanceId: g.rebalanceID,
 		}
-		response, err := proto.Marshal(tmp)
+		data, err := proto.Marshal(req)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdChangeConsumerPartitionReq, data)
+		if err != nil {
+			myLogger.Logger.PrintError("PackClientServerProtoBuf error", err)
+			return
+		}
+
+		writeCmdChan := client.getWriteCmdChan()
 		select {
-		case client.writeCmdChan <- response:
+		case writeCmdChan <- reqData:
 			//myLogger.Logger.Print("do not have client")
 		case <-time.After(100 * time.Microsecond):
 			myLogger.Logger.PrintWarning("notifyClient fail")
-			return
 		}
+		//tmp := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_ChangeConsumerPartition,
+		//	Partitions: g.client2PartitionMap[client.id],
+		//	RebalanceId: g.rebalanceID,
+		//}
+		//response, err := proto.Marshal(tmp)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return
+		//}
+		//writeCmdChan := client.getWriteCmdChan()
+		//select {
+		//case writeCmdChan <- response:
+		//	//myLogger.Logger.Print("do not have client")
+		//case <-time.After(100 * time.Microsecond):
+		//	myLogger.Logger.PrintWarning("notifyClient fail")
+		//	return
+		//}
 
 	}
 	myLogger.Logger.Print("notifyClients end")
 }
+
+//func (g *group)notifyClients()  {
+//	myLogger.Logger.Print("notifyClients ")
+//	g.clientsLock.Lock()
+//	defer g.clientsLock.Unlock()
+//	for _, client := range g.clients{
+//		tmp := &protocol.Server2Client{
+//			Key: protocol.Server2ClientKey_ChangeConsumerPartition,
+//			Partitions: g.client2PartitionMap[client.id],
+//			RebalanceId: g.rebalanceID,
+//		}
+//		response, err := proto.Marshal(tmp)
+//		if err != nil {
+//			myLogger.Logger.PrintError("marshaling error: ", err)
+//			return
+//		}
+//		select {
+//		case client.writeCmdChan <- response:
+//			//myLogger.Logger.Print("do not have client")
+//		case <-time.After(100 * time.Microsecond):
+//			myLogger.Logger.PrintWarning("notifyClient fail")
+//			return
+//		}
+//
+//	}
+//	myLogger.Logger.Print("notifyClients end")
+//}
 
 func (g *group)Rebalance(){
 	myLogger.Logger.Print("rebalance")

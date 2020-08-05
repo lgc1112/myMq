@@ -3,6 +3,7 @@ package broker
 import (
 	"../mylib/etcdClient"
 	"../mylib/myLogger"
+	"../mylib/protocalFuc"
 	"../protocol"
 	"flag"
 	"fmt"
@@ -544,19 +545,19 @@ func (b *Broker) ReadLoop() {
 			}
 			tmp.waitFinished <- true
 		case data = <- b.readChan:
-			if b.needExit {
-				continue //需要关闭了，不再处理新消息
-			}
-			clientConn, ok := b.getClient(data.clientID)
-			if !ok {
-				myLogger.Logger.Print("client conn have close", data)
-				continue
-			}
-
-			myLogger.Logger.Print("Broker read new data")
-
-
-			var response []byte
+			//if b.needExit {
+			//	continue //需要关闭了，不再处理新消息
+			//}
+			//clientConn, ok := b.getClient(data.clientID)
+			//if !ok {
+			//	myLogger.Logger.Print("client conn have close", data)
+			//	continue
+			//}
+			//
+			//myLogger.Logger.Print("Broker read new data")
+			//
+			//
+			//var response []byte
 			switch data.client2serverData.Key {
 			//case protocol.Client2ServerKey_CreatTopic:
 			//	//response = b.creatTopic(data)
@@ -577,9 +578,9 @@ func (b *Broker) ReadLoop() {
 			default:
 				myLogger.Logger.Print("cannot find key")
 			}
-			if response != nil{
-				clientConn.writeCmdChan <- response
-			}
+			//if response != nil{
+			//	clientConn.writeCmdChan <- response
+			//}
 		}
 		
 		
@@ -600,27 +601,62 @@ func (b *Broker)  deleteTopic2(topicName string)  (response []byte) {
 	topic, ok := b.getTopic(&topicName)
 	if !ok {
 		myLogger.Logger.Printf("try to delete not existed topic : %s", topicName)
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicNotExisted,
+
+		rsp := &protocol.DeleteTopicRsp{
+			Ret: protocol.RetStatus_Fail,
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCreatTopicRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_TopicNotExisted,
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 	} else {
 		topic.deleteAllPartitions()
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
-			Topic: topicName,
+
+		rsp := &protocol.DeleteTopicRsp{
+			Ret: protocol.RetStatus_Successs,
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCreatTopicRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_Success,
+		//	Topic: topicName,
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 		b.deleteTopic(&topicName)
 	}
 	return response
@@ -638,16 +674,32 @@ func (b *Broker)  creatTopic(topicName string, partitionNum int32)  (response []
 	topic, ok := b.getTopic(&topicName)
 	if ok {
 		myLogger.Logger.Printf("try to create existed topic : %s %d", topicName, int(partitionNum))
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicExisted,
-			//Partitions: topic.getPartitions(),
+		rsp := &protocol.CreatTopicRsp{
+			Ret: protocol.RetStatus_Fail,
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCreatTopicRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_TopicExisted,
+		//	//Partitions: topic.getPartitions(),
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 
 	} else {
 		myLogger.Logger.Printf("create topic : %s %d", topicName, int(partitionNum))
@@ -661,17 +713,37 @@ func (b *Broker)  creatTopic(topicName string, partitionNum int32)  (response []
 		b.brokerMapLock.RUnlock()
 		topic.CreatePartitions(int(partitionNum), addrs) //创建partitionNum个分区
 		b.addTopic(&topicName, topic)
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_SendPartions,
-			Topic: topicName,
+		rsp := &protocol.CreatTopicRsp{
+			Ret: protocol.RetStatus_Successs,
 			Partitions: topic.getPartitions(),
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCreatTopicRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+
+		//
+		//
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_SendPartions,
+		//	Topic: topicName,
+		//	Partitions: topic.getPartitions(),
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 		//b.groupMapLock.RLock()
 		//defer b.groupMapLock.RUnlock()
 		//for _, group := range b.groupMap{
@@ -701,28 +773,70 @@ func (b *Broker)  getPublisherPartition(topicName string)   (response []byte) {
 	topic, ok := b.getTopic(&topicName)
 	if ok {
 		myLogger.Logger.Printf("getPublisherPartition : %s", topicName)
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_SendPartions,
-			Topic: topicName,
-			Partitions: topic.getPartitions(),
+
+		rsp := &protocol.GetPublisherPartitionRsp{
+			Ret: protocol.RetStatus_Successs,
+			Partitions:  topic.getPartitions(),
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdGetPublisherPartitionRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+
+
+
+
+
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_SendPartions,
+		//	Topic: topicName,
+		//	Partitions: topic.getPartitions(),
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 	} else {
 		myLogger.Logger.Printf("Partition Not existed : %s", topicName)
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_TopicNotExisted,
+
+		rsp := &protocol.GetPublisherPartitionRsp{
+			Ret: protocol.RetStatus_Fail,
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdGetPublisherPartitionRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_TopicNotExisted,
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 	}
 	return response
 }
@@ -746,16 +860,36 @@ func (b *Broker)  getConsumerPartition(groupName string, clientID int64)   (resp
 	if partitions == nil{//不存在
 		return nil
 	}
-	data := &protocol.Server2Client{
-		Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-		Partitions: partitions,
+
+	rsp := &protocol.GetConsumerPartitionRsp{
+		Ret: protocol.RetStatus_Successs,
+		Partitions:  partitions,
 	}
-	var err error
-	response, err = proto.Marshal(data)
+	data, err := proto.Marshal(rsp)
 	if err != nil {
-		myLogger.Logger.PrintError("marshaling error: ", err)
+		myLogger.Logger.PrintError("marshaling error", err)
 		return nil
 	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdGetConsumerPartitionRsp, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return nil
+	}
+	myLogger.Logger.Printf("write: %s", rsp)
+	response = reqData
+
+
+
+	//data := &protocol.Server2Client{
+	//	Key: protocol.Server2ClientKey_ChangeConsumerPartition,
+	//	Partitions: partitions,
+	//}
+	//var err error
+	//response, err = proto.Marshal(data)
+	//if err != nil {
+	//	myLogger.Logger.PrintError("marshaling error: ", err)
+	//	return nil
+	//}
 	return response
 }
 
@@ -769,15 +903,33 @@ func (b *Broker)  subscribeTopic(topicName string, groupName string, clientID in
 	topic, ok := b.getTopic(&topicName)
 	if !ok {
 		myLogger.Logger.Printf("Topic Not existed : %s", topicName, len(b.topicMap))
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Error,
+
+
+		rsp := &protocol.SubscribePartitionRsp{
+			Ret: protocol.RetStatus_Fail,
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribePartitionRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_Error,
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 		return response
 	}
 
@@ -821,28 +973,65 @@ func (b *Broker)  subscribePartition(partitionName string, groupName string, cli
 	partition, ok := b.getPartition(&partitionName)
 	if !ok {
 		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Error,
+
+
+
+		rsp := &protocol.SubscribePartitionRsp{
+			Ret: protocol.RetStatus_Fail,
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
-		return response
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribePartitionRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_Error,
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
+		//return response
 	}else{
 		for !partition.isNativePartition{
 			myLogger.Logger.PrintError("subscribePartition is not native:", partition.name, partition.addr)
-			data := &protocol.Server2Client{
-				Key: protocol.Server2ClientKey_Error,
+			rsp := &protocol.SubscribePartitionRsp{
+				Ret: protocol.RetStatus_Fail,
 			}
-			var err error
-			response, err = proto.Marshal(data)
+			data, err := proto.Marshal(rsp)
 			if err != nil {
-				myLogger.Logger.PrintError("marshaling error: ", err)
+				myLogger.Logger.PrintError("marshaling error", err)
 				return nil
 			}
+			reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribePartitionRsp, data)
+			if err != nil {
+				myLogger.Logger.PrintError("marshaling error", err)
+				return nil
+			}
+			myLogger.Logger.Printf("write: %s", rsp)
+			response = reqData
+
+
+			//data := &protocol.Server2Client{
+			//	Key: protocol.Server2ClientKey_Error,
+			//}
+			//var err error
+			//response, err = proto.Marshal(data)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("marshaling error: ", err)
+			//	return nil
+			//}
 			return response
 		}
 		if partition.getGroupRebalanceId(groupName) > RebalanceId{//不是最新的，丢弃
@@ -856,18 +1045,36 @@ func (b *Broker)  subscribePartition(partitionName string, groupName string, cli
 		}
 		clientConn.consumePartions[partitionName] = true
 		partition.addComsummerClient(clientConn, groupName, RebalanceId)
-		data := &protocol.Server2Client{
-			Key: protocol.Server2ClientKey_Success,
+
+		rsp := &protocol.SubscribePartitionRsp{
+			Ret: protocol.RetStatus_Successs,
 		}
-		var err error
-		response, err = proto.Marshal(data)
+		data, err := proto.Marshal(rsp)
 		if err != nil {
-			myLogger.Logger.PrintError("marshaling error: ", err)
+			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribePartitionRsp, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return nil
+		}
+		myLogger.Logger.Printf("write: %s", rsp)
+		response = reqData
+
+
+		//data := &protocol.Server2Client{
+		//	Key: protocol.Server2ClientKey_Success,
+		//}
+		//var err error
+		//response, err = proto.Marshal(data)
+		//if err != nil {
+		//	myLogger.Logger.PrintError("marshaling error: ", err)
+		//	return nil
+		//}
 		clientConn.belongGroup = groupName
-		return response
 	}
+	return response
 }
 
 func (b *Broker)  registerConsumer(groupName string, clientID int64)   (response []byte) {
@@ -887,17 +1094,36 @@ func (b *Broker)  registerConsumer(groupName string, clientID int64)   (response
 	if succ{//已通过go balance response
 		return nil
 	}
-	data := &protocol.Server2Client{
-		Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-		Partitions: group.getClientPartition(clientConn.id),
-	}
 
-	var err error
-	response, err = proto.Marshal(data)
+	rsp := &protocol.RegisterConsumerRsp{
+		Ret: protocol.RetStatus_Successs,
+
+	}
+	data, err := proto.Marshal(rsp)
 	if err != nil {
-		myLogger.Logger.PrintError("marshaling error: ", err)
+		myLogger.Logger.PrintError("marshaling error", err)
 		return nil
 	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdRegisterConsumerRsp, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return nil
+	}
+	myLogger.Logger.Printf("write: %s", rsp)
+	response = reqData
+
+
+	//data := &protocol.Server2Client{
+	//	Key: protocol.Server2ClientKey_ChangeConsumerPartition,
+	//	Partitions: group.getClientPartition(clientConn.id),
+	//}
+	//
+	//var err error
+	//response, err = proto.Marshal(data)
+	//if err != nil {
+	//	myLogger.Logger.PrintError("marshaling error: ", err)
+	//	return nil
+	//}
 	return response
 }
 

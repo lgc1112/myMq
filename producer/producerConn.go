@@ -1,12 +1,9 @@
 package producer
 
 import (
-	"../mylib/myLogger"
+	"../mylib/protocalFuc"
 	"../protocol"
 	"bufio"
-	"encoding/binary"
-	"github.com/golang/protobuf/proto"
-	"io"
 	"net"
 )
 
@@ -14,7 +11,7 @@ type producerConn struct {
 	addr string
 	producer *Producer
 	reader *bufio.Reader
-	writer *bufio.Writer
+	//writer *bufio.Writer
 	conn net.Conn
 	//writeChan     chan *protocol.Client2Server
 	//exitChan chan string
@@ -28,7 +25,7 @@ func newConn(addr string, producer *Producer)  (*producerConn, error){
 	c := &producerConn{
 		addr: addr,
 		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
+		//writer: bufio.NewWriter(conn),
 		producer: producer,
 		conn: conn,
 	}
@@ -36,38 +33,41 @@ func newConn(addr string, producer *Producer)  (*producerConn, error){
 }
 
 
-func (p *producerConn)readResponse() (*protocol.Server2Client, error){
+func (p *producerConn)readResponse() (*protocol.ClientServerCmd, []byte, error){
+	return protocalFuc.ReadAndUnPackClientServerProtoBuf(p.reader)
+
+
 	//myLogger.Logger.Print("reading")
-	tmp := make([]byte, 4)
-	_, err := io.ReadFull(p.reader, tmp) //读取长度
-	if err != nil {
-		if err == io.EOF {
-			myLogger.Logger.Print("EOF")
-		} else {
-			myLogger.Logger.Print(err)
-		}
-		return nil, err
-	}
-	len := int32(binary.BigEndian.Uint32(tmp))
-	myLogger.Logger.Printf("readLen %d ", len)
-	requestData := make([]byte, len)
-	_, err = io.ReadFull(p.reader, requestData) //读取内容
-	if err != nil {
-		if err == io.EOF {
-			myLogger.Logger.Print("EOF")
-		} else {
-			myLogger.Logger.Print(err)
-		}
-		return nil, err
-	}
-	response := &protocol.Server2Client{}
-	err = proto.Unmarshal(requestData, response)
-	if err != nil {
-		myLogger.Logger.Print("Unmarshal error %s", err)
-		return nil, err
-	}
-	myLogger.Logger.Printf("receive response Key:%s : %s", response.Key, response)
-	return response, nil
+	//tmp := make([]byte, 4)
+	//_, err := io.ReadFull(p.reader, tmp) //读取长度
+	//if err != nil {
+	//	if err == io.EOF {
+	//		myLogger.Logger.Print("EOF")
+	//	} else {
+	//		myLogger.Logger.Print(err)
+	//	}
+	//	return nil, err
+	//}
+	//len := int32(binary.BigEndian.Uint32(tmp))
+	//myLogger.Logger.Printf("readLen %d ", len)
+	//requestData := make([]byte, len)
+	//_, err = io.ReadFull(p.reader, requestData) //读取内容
+	//if err != nil {
+	//	if err == io.EOF {
+	//		myLogger.Logger.Print("EOF")
+	//	} else {
+	//		myLogger.Logger.Print(err)
+	//	}
+	//	return nil, err
+	//}
+	//response := &protocol.Server2Client{}
+	//err = proto.Unmarshal(requestData, response)
+	//if err != nil {
+	//	myLogger.Logger.Print("Unmarshal error %s", err)
+	//	return nil, err
+	//}
+	//myLogger.Logger.Printf("receive response Key:%s : %s", response.Key, response)
+	//return response, nil
 }
 
 func (p *producerConn)Write(data []byte) (error){
@@ -80,16 +80,16 @@ func (p *producerConn)Write(data []byte) (error){
 	//	//myLogger.Logger.PrintError("writer error: ", err)
 	//	return err
 	//}
-	_, err := p.writer.Write(data)
+	_, err := p.conn.Write(data)
 	if err != nil {
 		//myLogger.Logger.PrintError("writer error: ", err)
 		return err
 	}
-	err = p.writer.Flush()
-	if err != nil {
-		//myLogger.Logger.PrintError("writer error: ", err)
-		return err
-	}
+	//err = p.writer.Flush()
+	//if err != nil {
+	//	//myLogger.Logger.PrintError("writer error: ", err)
+	//	return err
+	//}
 	return nil
 }
 //func (p *producerConn)Handle() {

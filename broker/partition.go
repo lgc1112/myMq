@@ -2,6 +2,7 @@ package broker
 
 import (
 	"../mylib/myLogger"
+	"../mylib/protocalFuc"
 	"../protocol"
 	"github.com/golang/protobuf/proto"
 	"math"
@@ -124,15 +125,33 @@ func (p *partition) readLoop()  {
 				for grpName, subGrp := range p.subscribedGroups{
 					if subGrp.priorityQueue.Len() > queueSize - 2{//写不下了，需拒绝这条消息
 						myLogger.Logger.Printf("group %s is full", grpName)
-						response := &protocol.Server2Client{
-							Key: protocol.Server2ClientKey_PriorityQueueFull,
+
+						rsp := &protocol.PushMsgRsp{
+							Ret: protocol.RetStatus_QueueFull,
 						}
-						data, err := proto.Marshal(response)
+						data, err := proto.Marshal(rsp)
 						if err != nil {
-							myLogger.Logger.PrintError("marshaling error: ", err)
+							myLogger.Logger.PrintError("marshaling error", err)
 							continue
 						}
-						p.responseChan <- data
+						reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
+						if err != nil {
+							myLogger.Logger.PrintError("marshaling error", err)
+							continue
+						}
+						myLogger.Logger.Printf("write: %s", rsp)
+						//response := reqData
+
+
+						//response := &protocol.Server2Client{
+						//	Key: protocol.Server2ClientKey_PriorityQueueFull,
+						//}
+						//data, err := proto.Marshal(response)
+						//if err != nil {
+						//	myLogger.Logger.PrintError("marshaling error: ", err)
+						//	continue
+						//}
+						p.responseChan <- reqData
 						goto OuterLoop
 					}
 				}
@@ -142,15 +161,31 @@ func (p *partition) readLoop()  {
 				subGrp.readChan <- internalMsg
 			}
 
-			response := &protocol.Server2Client{
-				Key: protocol.Server2ClientKey_PublishSuccess,
+			rsp := &protocol.PushMsgRsp{
+				Ret: protocol.RetStatus_Successs,
 			}
-			data, err := proto.Marshal(response)
+			data, err := proto.Marshal(rsp)
 			if err != nil {
-				myLogger.Logger.PrintError("marshaling error: ", err)
+				myLogger.Logger.PrintError("marshaling error", err)
 				continue
 			}
-			p.responseChan <- data
+			reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
+			if err != nil {
+				myLogger.Logger.PrintError("marshaling error", err)
+				continue
+			}
+			myLogger.Logger.Printf("write: %s", rsp)
+
+
+			//response := &protocol.Server2Client{
+			//	Key: protocol.Server2ClientKey_PublishSuccess,
+			//}
+			//data, err := proto.Marshal(response)
+			//if err != nil {
+			//	myLogger.Logger.PrintError("marshaling error: ", err)
+			//	continue
+			//}
+			p.responseChan <- reqData
 			p.subscribedGroupsLock.RUnlock()
 		}
 	}
