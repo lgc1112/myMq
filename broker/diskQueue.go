@@ -167,7 +167,7 @@ func (d *diskQueue)readDiskMsg() ([]byte, error) {
 		d.wOffset = 0
 		d.rOffset = 0
 
-		d.persistDiskMetaData() //删除前先同步，保存好偏移数据，已防止访问已删除的数据
+		d.persistDiskMetaData() //删除前先同步，保存好偏移数据，以防止访问已删除的数据
 		err := os.Remove(deleteFileName)
 		if err != nil {
 			myLogger.Logger.PrintError("Remove file Error", deleteFileName, err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,75 +15,161 @@ import "../../producer"
 
 var sum int32
 const  testTime = 10000 * time.Second//测试时间
-const producerNum = 1
-const partitionNum = 6
+var producerNum = 10
+var msgLen = 100
+var reCreateTopic = false //是否需要重建topic
+var partitionNum = 1
 func main() {
 	fmt.Println("producer start")
+	//解析参数
 	brokerAddr := flag.String("addr", "0.0.0.0:12345", "ip:port")
+	prdNum := flag.Int("producerNum", producerNum, "int")
+	parNum := flag.Int("partitionNum", partitionNum, "int")
+	rC := flag.Bool("reCreateTopic", reCreateTopic, "bool")
+	mL := flag.Int("msgLen", msgLen, "int")
 	flag.Parse() //解析参数
+	producerNum = *prdNum
+	partitionNum = *parNum
+	reCreateTopic = *rC
+	msgLen = *mL
 
-	if *brokerAddr == "0.0.0.0:12345" {
-		*brokerAddr = getIntranetIp() + ":12345" //真实ip
+	fmt.Println("producerNum:", producerNum, " partitionNum:", partitionNum, " reCreateTopic", reCreateTopic, " msgLen:", msgLen)
+
+	host, port, _ := net.SplitHostPort(*brokerAddr)
+	if host == "0.0.0.0" { //转换为本地ip
+		*brokerAddr = getIntranetIp() + ":" + port//真实ip
 	}
-	flag.Parse() //解析参数
+
 
 	brokerAddrs := []string{*brokerAddr}
-	//signal.Notify(b.exitSignal, os.Interrupt, os.Kill)
-	//signal.Notify(b.exitSignal)
+	stressTest(brokerAddrs)
+}
 
-
+//压力测试代码
+func  stressTest(addr []string)  {
 	var wg sync.WaitGroup
+	exitChan := make(chan bool)
+	sendMsg := generateString(msgLen)
 	for i := 0; i < producerNum; i++{
-		p, err := producer.NewProducer(brokerAddrs)
+		p, err := producer.NewProducer(addr)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		if i == 0{
-			//p.DeleteTopic("fff") //先删除原来的分区
-			p.CreatTopic("fff", partitionNum)
+		if i == 0 && reCreateTopic{
+			p.DeleteTopic("fff") //先删除原来的分区
+			time.Sleep(1000 * time.Millisecond)
+			p.CreatTopic("fff", int32(partitionNum)) //创建新的分区
 		}
 		wg.Add(1)
 		go func() {
-			producerHandle(p)
+			producerHandle(p, exitChan, sendMsg)
 			//atomic.AddInt64(&sum, times)
 			wg.Done()
 		}()
-
 	}
-
-	//wg.Wait()
+	exitSignal := make(chan os.Signal)
+	signal.Notify(exitSignal, os.Interrupt, os.Kill)//监听信号
 	starTime := time.Now()
-	timeTicker := time.NewTicker(testTime)
-	atomic.StoreInt32(&sum, 0)
+	timeTicker := time.NewTicker(time.Second) //每秒触发一次
+	//atomic.StoreInt32(&sum, 0)
 	myLogger.Logger.PrintfDebug("%d", sum )
-
-	<- timeTicker.C
-	endTime := time.Now()
-	seconds := int64(testTime / time.Second)
-	seconds = int64(endTime.Sub(starTime).Seconds())
-	myLogger.Logger.PrintfDebug("partitionNum %d, producerNum: %d, test time : %d , send times : %d, qps : %d",partitionNum, producerNum, seconds, sum, int64(sum) / seconds)
-	//myLogger.Logger.PrintfDebug("%d", seconds )
-	//exitCh := make(chan error)
-	//<-exitCh
-	//fmt.Println("bye")
-}
-
-func producerHandle(p *producer.Producer)  int64{
-	var i int64
-	//timeTicker := time.NewTicker(testTime)
-	//timeTickerChan := timeTicker.C
+	lastSecendSum := sum
 	for{
 		select {
-		//case <- timeTickerChan:
-		//	goto exit
+		case s := <- exitSignal: //退出信号来了
+			myLogger.Logger.Print("exitSignal:", s)
+			close(exitChan) //关闭退出管道，通知所有协程退出
+			goto exit
+		case <- timeTicker.C:
+			curSum := atomic.LoadInt32(&sum)
+			myLogger.Logger.PrintfDebug("发送速率: %d / s, 当前发送总量 %d", curSum - lastSecendSum, curSum)
+			lastSecendSum = curSum
+		}
+	}
+exit:
+	wg.Wait()//等待退出
+
+	endTime := time.Now()
+	seconds := int64(endTime.Sub(starTime).Seconds())
+	myLogger.Logger.PrintfDebug("生产者数量: %d   平均发送速率: %d   发送总量: %d", producerNum, int64(sum) / seconds, sum)
+
+}
+
+//func  NormalTest(addr []string)  {
+//	var wg sync.WaitGroup
+//	var exitChan chan
+//	for i := 0; i < producerNum; i++{
+//		p, err := producer.NewProducer(addr)
+//		if err != nil {
+//			fmt.Println(err)
+//			os.Exit(1)
+//		}
+//		if i == 0{
+//			p.DeleteTopic("fff") //先删除原来的分区
+//			p.CreatTopic("fff", partitionNum) //创建新的分区
+//		}
+//		wg.Add(1)
+//		go func() {
+//			producerHandle(p)
+//			//atomic.AddInt64(&sum, times)
+//			wg.Done()
+//		}()
+//
+//	}
+//
+//	//wg.Wait()
+//	starTime := time.Now()
+//	timeTicker := time.NewTicker(testTime)
+//	atomic.StoreInt32(&sum, 0)
+//	myLogger.Logger.PrintfDebug("%d", sum )
+//
+//	<- timeTicker.C
+//	endTime := time.Now()
+//	seconds := int64(testTime / time.Second)
+//	seconds = int64(endTime.Sub(starTime).Seconds())
+//	myLogger.Logger.PrintfDebug("partitionNum %d, producerNum: %d, test time : %d , send times : %d, qps : %d",partitionNum, producerNum, seconds, sum, int64(sum) / seconds)
+//}
+
+//每个生产者的处理函数，不等的ack
+func producerHandle(p *producer.Producer, exitChan <- chan bool, sendMsg string) {
+	var i int64
+	for{
+		select {
+		case _, ok := <- exitChan: //退出
+			if !ok{
+				p.Close()
+				return
+			}
+		default:
+			i++
+			err := p.PubilshWithoutAck("fff", []byte(sendMsg), 0)
+			if err != nil {
+				myLogger.Logger.Print(err)
+				i--
+				continue
+			}
+			atomic.AddInt32(&sum, 1)
+		}
+	}
+}
+
+//每个生产者的处理函数，同步发送数据
+func producerHandleSync(p *producer.Producer, exitChan <- chan bool) {
+	var i int64
+	for{
+		select {
+		case _, ok := <- exitChan:
+			if !ok{
+				return
+			}
 		default:
 			s := fmt.Sprintf("hello : %d", i)
 			i++
-			time.Sleep(1*time.Second)
+			time.Sleep(500 * time.Millisecond)
 			err := p.Pubilsh("fff", []byte(s), 0)
 			if err != nil {
-				myLogger.Logger.PrintError(err)
+				myLogger.Logger.Print(err)
 				//os.Exit(1)
 				i--
 				continue
@@ -90,15 +177,11 @@ func producerHandle(p *producer.Producer)  int64{
 			atomic.AddInt32(&sum, 1)
 		}
 	}
-//exit:
-//	myLogger.Logger.Print("producer stop: ", i)
-	//timeTicker.Stop()
-	return i
 }
 
+//获取本机IP地址
 func getIntranetIp() string{
 	addrs, err := net.InterfaceAddrs()
-
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -112,4 +195,15 @@ func getIntranetIp() string{
 		}
 	}
 	return "0.0.0.0"
+}
+
+//生成指定长度的字符串
+func generateString(n int) string{
+	str := "0123456789abcdefghijklmnopqrstuvwxyz"
+	bytes := []byte(str)
+	result := make([]byte, 0, n)
+	for i := 0; i < n; i++ {
+		result = append(result, bytes[i % len(bytes)])
+	}
+	return string(result)
 }

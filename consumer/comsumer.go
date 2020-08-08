@@ -9,8 +9,9 @@ import (
 	"github.com/golang/protobuf/proto"
 	"sync"
 )
-const logDir string = "./consumer/log/"
-const openCluster bool = true
+const logDir string = "./consumerlog/"
+const openCluster bool = true //是否开启集群模式
+const defaultEtcdAddr string ="9.135.8.253:2379" //etcd服务器地址
 type Consumer struct {
 	addrs   []string
 	groupName string
@@ -21,7 +22,7 @@ type Consumer struct {
 	sendIdx int
 	readChan     chan *readData
 	exitChan chan string
-	etcdClient *etcdClient.EtcdClient
+	etcdClient *etcdClient.ClientEtcdClient
 	topic string
 }
 type readData struct {
@@ -34,6 +35,7 @@ type Handler interface {
 	ProcessMsg(msg *protocol.Message)
 }
 
+// 新建消费者实例
 func NewConsumer(addr []string, groupName string) (*Consumer, error) {
 	_, err := myLogger.New(logDir)
 	c := &Consumer{
@@ -43,9 +45,9 @@ func NewConsumer(addr []string, groupName string) (*Consumer, error) {
 		exitChan: make(chan string),
 		brokerConnMap: make(map[string] *consumerConn),
 	}
-	//err = c.Connect2Brokers()
 	if openCluster{
-		c.etcdClient, err = etcdClient.NewEtcdClient(c, false)
+		etcdAddr := defaultEtcdAddr
+		c.etcdClient, err = etcdClient.NewClientEtcdClient(c,  &etcdAddr)
 		if err != nil{
 			myLogger.Logger.PrintError(err)
 			return nil, err
@@ -61,6 +63,7 @@ func NewConsumer(addr []string, groupName string) (*Consumer, error) {
 	return c, err
 }
 
+//连接到controller
 func (c *Consumer) connect2Controller() error{
 	masterAddr, err := c.etcdClient.GetControllerAddr() //获取controller地址
 	if err != nil {
@@ -75,25 +78,33 @@ func (c *Consumer) connect2Controller() error{
 	return err
 }
 
-func (c *Consumer) ChangeControllerAddr(addr *protocol.ListenAddr) {
-	masterAddr := addr.ClientListenAddr
-	err := c.Connect2Broker(masterAddr)
+//controller服务器发生改变时的回调函数
+func (c *Consumer) ControllerAddrChange(addr *protocol.ListenAddr) {
+	myLogger.Logger.Print("ControllerAddrChange: ", addr)
+	controller := addr.ClientListenAddr
+	err := c.Connect2Broker(controller)
 	if err != nil {
 		myLogger.Logger.PrintError(err)
 	}
-	c.controllerConn, _ = c.getBrokerConn(&masterAddr)
+	c.controllerConn, _ = c.getBrokerConnAndLock(&controller)
 	c.SubscribeTopic(c.topic)
-	return
-}
-func (c *Consumer) BecameNormalBroker() {
-	myLogger.Logger.PrintError("should not come here")
-	return
-}
-func (c *Consumer) BecameController() {
-	myLogger.Logger.PrintError("should not come here")
+	c.getBrokerConnUnLock()
 	return
 }
 
+//集群中某topic发生变化时的回调函数
+func (c *Consumer) TopicChange(topic string, partition *protocol.Partitions) {
+	myLogger.Logger.Print("TopicChange: ", topic, partition)
+	if topic == c.topic{
+		if _, ok := c.getBrokerConnAndLock(&c.controllerConn.addr); ok{ //查询连接是否失效
+			c.SubscribeTopic(c.topic)
+		}
+		c.getBrokerConnUnLock()
+	}
+	return
+}
+
+//添加broker到brokerConnMap
 func (c *Consumer) addBrokerConn(conn *consumerConn) {
 	c.brokerConnMapLock.Lock()
 	c.brokerConnMap[conn.addr] = conn
@@ -101,15 +112,31 @@ func (c *Consumer) addBrokerConn(conn *consumerConn) {
 	return
 }
 
+//获取broker的连接
 func (c *Consumer) getBrokerConn(addr *string) (*consumerConn, bool) {
-
-	myLogger.Logger.Print("getBrokerConn", addr)
+	myLogger.Logger.Print("getBrokerConn ", addr)
 	c.brokerConnMapLock.RLock()
 	broker, ok := c.brokerConnMap[*addr]
 	c.brokerConnMapLock.RUnlock()
+	myLogger.Logger.Print("getBrokerConn end")
 	return broker, ok
 }
-func (c *Consumer) removeBrokerConn(conn *consumerConn) {
+
+//获取broker的连接并锁住
+func (c *Consumer) getBrokerConnAndLock(addr *string) (*consumerConn, bool) {
+	myLogger.Logger.Print("getBrokerConn ", addr)
+	c.brokerConnMapLock.RLock()
+	broker, ok := c.brokerConnMap[*addr]
+	myLogger.Logger.Print("getBrokerConn end")
+	return broker, ok
+}
+
+func (c *Consumer) getBrokerConnUnLock() {
+	c.brokerConnMapLock.RUnlock()
+}
+
+//删除broker
+func (c *Consumer) deleteBrokerConn(conn *consumerConn) {
 	myLogger.Logger.Print("removeBrokerConn", conn.addr)
 	c.brokerConnMapLock.Lock()
 	_, ok := c.brokerConnMap[conn.addr]
@@ -121,6 +148,7 @@ func (c *Consumer) removeBrokerConn(conn *consumerConn) {
 	c.brokerConnMapLock.Unlock()
 }
 
+//连接到所有c.addrs 中的broker地址
 func (c *Consumer) Connect2Brokers() error {
 	myLogger.Logger.Print("Connect2Brokers", c.addrs)
 	for _, addr := range c.addrs {
@@ -132,13 +160,14 @@ func (c *Consumer) Connect2Brokers() error {
 	return nil
 }
 
+//连接到指定broker
 func (c *Consumer) Connect2Broker(addr string) error {
 	if _, ok := c.getBrokerConn(&addr); ok{
 		myLogger.Logger.Printf("connecting to existing broker - %s", addr)
 		return nil
 	}
 	var err error
-	c.controllerConn, err = newConn(addr, c)
+	c.controllerConn, err = NewConn(addr, c)
 	if err != nil {
 		myLogger.Logger.Printf("(%s) connecting to broker error - %s %s", addr, err)
 		return err
@@ -149,6 +178,64 @@ func (c *Consumer) Connect2Broker(addr string) error {
 	return nil
 }
 
+//删除topic
+func (c *Consumer) DeleteTopic(topic string){
+	if c.controllerConn == nil{
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return
+	}
+	requestData := &protocol.DeleteTopicReq{
+		TopicName: topic,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdDeleteTopicReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
+	}
+	err = c.controllerConn.Put(reqData)
+	if err != nil {
+		myLogger.Logger.PrintError("controllerConn Write err", err)
+		return
+	}
+	myLogger.Logger.Printf("DeleteTopic %s ", topic)
+}
+
+//创建topic
+func (c *Consumer) CreatTopic(topic string, num int32){
+	if c.controllerConn == nil{
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return
+	}
+	requestData := &protocol.CreatTopicReq{
+		TopicName: topic,
+		PartitionNum: num,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCreatTopicReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return
+	}
+	err = c.controllerConn.Put(reqData)
+	//err = c.controllerConn.Write(reqData)
+	if err != nil {
+		myLogger.Logger.PrintError("controllerConn Write err", err)
+		return
+	}
+	myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
+
+}
+
+//订阅topic
 func (c *Consumer) SubscribeTopic(topicName string) error {
 	c.topic = topicName
 	requestData := &protocol.SubscribeTopicReq{
@@ -171,27 +258,17 @@ func (c *Consumer) SubscribeTopic(topicName string) error {
 		myLogger.Logger.PrintError("controllerConn Write err", err)
 		return err
 	}
-
-
-	//c.topic = topicName
-	//requestData := &protocol.Client2Server{
-	//	Key:       protocol.Client2ServerKey_SubscribeTopic,
-	//	Topic:     topicName,
-	//	GroupName: c.groupName,
-	//}
-	//c.controllerConn.Put(requestData)
-	//c.controllerConn.writeChan <- requestData
 	myLogger.Logger.Printf("subscribeTopic %s : %s", topicName, requestData)
 	return nil
 }
 
+//上传readyCount
 func (c *Consumer) CommitReadyNum(num int32) error {
 	c.brokerConnMapLock.RLock()
 	defer c.brokerConnMapLock.RUnlock()
 	if len(c.brokerConnMap) == 0{
 		return errors.New("do not have any brokerConn")
 	}
-
 
 	requestData := &protocol.CommitReadyNumReq{
 		ReadyNum: num / int32(len(c.brokerConnMap)),
@@ -206,8 +283,6 @@ func (c *Consumer) CommitReadyNum(num int32) error {
 		myLogger.Logger.PrintError("marshaling error", err)
 		return err
 	}
-
-	c.brokerConnMapLock.RLock()
 	for _, brokerConn := range c.brokerConnMap{
 		myLogger.Logger.Printf("write: %s", requestData)
 		err = brokerConn.Put(reqData)
@@ -216,55 +291,39 @@ func (c *Consumer) CommitReadyNum(num int32) error {
 			return err
 		}
 	}
-	c.brokerConnMapLock.RUnlock()
-	//requestData := &protocol.Client2Server{
-	//	Key: protocol.Client2ServerKey_CommitReadyNum,
-	//	ReadyNum: num / int32(len(c.brokerConnMap)),
-	//}
-
-
-	//for _, brokerConn := range c.brokerConnMap{
-	//	brokerConn.Put(requestData)
-	//}
-
 	myLogger.Logger.Print("commitReadyNum", requestData)
 	return nil
 }
 
-
-func (c *Consumer) ReadLoop(handler Handler) {
+//处理broker发来的消息
+func (c *Consumer) ReadLoop(handler Handler, exitChan <- chan bool) {
 	for{
 		select {
-		case  <- c.exitChan:
-			break
+		case   _, ok := <- exitChan:
+			if !ok{
+				myLogger.Logger.Print("readLoop exit")
+				return
+			}
 		case data := <- c.readChan:
 			myLogger.Logger.Print("readLoop")
-
-			//server2ClientData := data.server2ClientData
 
 			cmd := data.cmd
 			var response []byte
 			switch *cmd {
 			case protocol.ClientServerCmd_CmdPushMsgReq:
-
 				req := &protocol.PushMsgReq{}
 				err := proto.Unmarshal(data.msgBody, req) //得到消息体
 				if err != nil {
 					myLogger.Logger.PrintError("Unmarshal error %s", err)
-					continue
+					break
 				}else{
 					myLogger.Logger.Printf("receive PushMsgReq: %s", req)
 				}
-
-
 				if handler == nil{//为空则使用默认处理
 					c.processMsg(req.Msg)
-
 				}else{//否则使用传入参数处理
 					handler.ProcessMsg(req.Msg)
 				}
-
-
 				rsp := &protocol.PushMsgRsp{
 					Ret: protocol.RetStatus_Successs,
 					PartitionName: req.PartitionName,
@@ -274,12 +333,12 @@ func (c *Consumer) ReadLoop(handler Handler) {
 				data, err := proto.Marshal(rsp)
 				if err != nil {
 					myLogger.Logger.PrintError("marshaling error", err)
-					continue
+					break
 				}
 				reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
 				if err != nil {
 					myLogger.Logger.PrintError("marshaling error", err)
-					continue
+					break
 				}
 				myLogger.Logger.Printf("write: %s", rsp)
 				response = reqData
@@ -290,41 +349,130 @@ func (c *Consumer) ReadLoop(handler Handler) {
 				err := proto.Unmarshal(data.msgBody, req) //得到消息体
 				if err != nil {
 					myLogger.Logger.PrintError("Unmarshal error %s", err)
-					continue
+					break
 				}else{
-					myLogger.Logger.Printf("receive ChangeConsumerPartitio: %s", req)
+					myLogger.Logger.Printf("receive ChangeConsumerPartitionReq: %s", req)
 				}
 				response = c.changeConsumerPartition(req.Partitions, req.RebalanceId)
 
-				//response = c.changeConsumerPartition(server2ClientData)
-			//case protocol.Server2ClientKey_Success:
-			//	myLogger.Logger.Print("success")
 			case protocol.ClientServerCmd_CmdSubscribePartitionRsp:
 				req := &protocol.SubscribePartitionRsp{}
 				err := proto.Unmarshal(data.msgBody, req) //得到消息体
 				if err != nil {
 					myLogger.Logger.PrintError("Unmarshal error %s", err)
-					continue
+					break
 				}else{
 					myLogger.Logger.Printf("receive ChangeConsumerPartitio: %s", req)
 				}
 			default:
-				myLogger.Logger.Print("cannot find key :", cmd )
+				myLogger.Logger.Print("received key :", cmd )
 			}
 			if response != nil { //ask
-				conn, ok := c.getBrokerConn(&data.connAddr)
+				conn, ok := c.getBrokerConnAndLock(&data.connAddr)
 				if ok {
-					//myLogger.Logger.Print("write response", response)
+					myLogger.Logger.Print("write response", response)
 					conn.writeChan <- response
+					myLogger.Logger.Print("write response end")
 				}else{
 					myLogger.Logger.Print("conn cannot find", data.connAddr)
 				}
+				c.getBrokerConnUnLock()
 			}
 
 		}
 
 	}
 }
+
+//默认消息处理函数
+func (c *Consumer) processMsg(msg *protocol.Message){
+	myLogger.Logger.Print("Consumer receive data:", msg)
+}
+
+//修改消费者订阅的分区
+func (c *Consumer) changeConsumerPartition(Partitions []*protocol.Partition, rebalanceId int32) ([]byte){
+	myLogger.Logger.Print("changeConsumerPartition:", Partitions)
+	c.partitions = Partitions
+	c.subscribePartition(rebalanceId)
+	return nil
+}
+
+//订阅分区
+func (c *Consumer) subscribePartition(rebalanceId int32) error{
+	myLogger.Logger.Print("subscribePartition len:", len(c.partitions))
+	for _, partition := range c.partitions{
+		requestData := &protocol.SubscribePartitionReq{
+			PartitionName: partition.Name,
+			GroupName:     c.groupName,
+			RebalanceId:   rebalanceId,
+		}
+		data, err := proto.Marshal(requestData)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return err
+		}
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribePartitionReq, data)
+		if err != nil {
+			myLogger.Logger.PrintError("marshaling error", err)
+			return err
+		}
+		conn, ok := c.getBrokerConn(&partition.Addr)
+		if ok {
+			myLogger.Logger.Print("getBrokerConn success", partition.Addr)
+		}else{
+			err := c.Connect2Broker(partition.Addr)
+			if err != nil {
+				myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+				continue
+			}
+			conn, _ = c.getBrokerConn(&partition.Addr)
+			myLogger.Logger.Print("subscribePartion have not connect", partition.Addr)
+		}
+
+		myLogger.Logger.Printf("write: %s", requestData)
+		err = conn.Put(reqData)
+		if err != nil {
+			myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+			continue
+		}
+	}
+	return nil
+
+}
+
+//func (c *Consumer) subscribePartion(rebalanceId int32) error{
+//	myLogger.Logger.Print("subscribePartion len:", len(c.partitions))
+//	for _, partition := range c.partitions{
+//		requestData := &protocol.Client2Server{
+//			Key: protocol.Client2ServerKey_SubscribePartion,
+//			//Topic: partition.TopicName,
+//			Partition:   partition.Name,
+//			GroupName:   c.groupName,
+//			RebalanceId: rebalanceId,
+//		}
+//		conn, ok := c.getBrokerConn(&partition.Addr)
+//		if ok {
+//			myLogger.Logger.Print("subscribePartion success", requestData)
+//		}else{
+//			err := c.Connect2Broker(partition.Addr)
+//			if err != nil {
+//				myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+//				continue
+//			}
+//			conn, _ = c.getBrokerConn(&partition.Addr)
+//			myLogger.Logger.Print("subscribePartion have not connect", partition.Addr)
+//		}
+//
+//		err := conn.Put(requestData)
+//		if err != nil {
+//			myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+//			continue
+//		}
+//		//conn.writeChan <- requestData
+//	}
+//	return nil
+//
+//}
 
 //func (c *Consumer) ReadLoop(handler Handler) {
 //	for{
@@ -389,132 +537,3 @@ func (c *Consumer) ReadLoop(handler Handler) {
 //
 //	}
 //}
-
-func (c *Consumer) processMsg(msg *protocol.Message){
-	myLogger.Logger.Print("Consumer receive data:", msg)
-	//
-	//rsp := &protocol.PushMsgRsp{
-	//	PartitionName: partitionName,
-	//	GroupName: groupName,
-	//	MsgId: msgId,
-	//}
-	//data2, err := proto.Marshal(rsp)
-	//if err != nil {
-	//	myLogger.Logger.PrintError("marshaling error", err)
-	//	return nil
-	//}
-	//reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data2)
-	//if err != nil {
-	//	myLogger.Logger.PrintError("marshaling error", err)
-	//	return nil
-	//}
-	//response = reqData
-
-	//response := &protocol.Client2Server{
-	//	Key: protocol.Client2ServerKey_ConsumeSuccess,
-	//	Partition: data.MsgPartitionName,
-	//	GroupName: data.MsgGroupName,
-	//	MsgId: data.Msg.Id,
-	//}
-	//myLogger.Logger.Printf("write: %s", rsp)
-	//return reqData
-}
-//func (c *Consumer) changeConsumerPartition(data *protocol.Server2Client) ([]byte){
-//	myLogger.Logger.Print("changeConsumerPartition:", data.Partitions)
-//	c.partitions = data.Partitions
-//	c.subscribePartion(data.RebalanceId)
-//	return nil
-//}
-
-func (c *Consumer) changeConsumerPartition(Partitions []*protocol.Partition, rebalanceId int32) ([]byte){
-	myLogger.Logger.Print("changeConsumerPartition:", Partitions)
-	c.partitions = Partitions
-	c.subscribePartion(rebalanceId)
-	return nil
-}
-
-
-func (c *Consumer) subscribePartion(rebalanceId int32) error{
-	myLogger.Logger.Print("subscribePartion len:", len(c.partitions))
-	for _, partition := range c.partitions{
-		requestData := &protocol.SubscribePartitionReq{
-			PartitionName: partition.Name,
-			GroupName: c.groupName,
-			RebalanceId: rebalanceId,
-		}
-		data, err := proto.Marshal(requestData)
-		if err != nil {
-			myLogger.Logger.PrintError("marshaling error", err)
-			return err
-		}
-		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdSubscribePartitionReq, data)
-		if err != nil {
-			myLogger.Logger.PrintError("marshaling error", err)
-			return err
-		}
-		//requestData := &protocol.Client2Server{
-		//	Key: protocol.Client2ServerKey_SubscribePartion,
-		//	//Topic: partition.TopicName,
-		//	Partition:   partition.Name,
-		//	GroupName:   c.groupName,
-		//	RebalanceId: rebalanceId,
-		//}
-		conn, ok := c.getBrokerConn(&partition.Addr)
-		if ok {
-			myLogger.Logger.Print("getBrokerConn success", partition.Addr)
-		}else{
-			err := c.Connect2Broker(partition.Addr)
-			if err != nil {
-				myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
-				continue
-			}
-			conn, _ = c.getBrokerConn(&partition.Addr)
-			myLogger.Logger.Print("subscribePartion have not connect", partition.Addr)
-		}
-
-		myLogger.Logger.Printf("write: %s", requestData)
-		err = conn.Put(reqData)
-		if err != nil {
-			myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
-			continue
-		}
-		//conn.writeChan <- requestData
-	}
-	return nil
-
-}
-
-//func (c *Consumer) subscribePartion(rebalanceId int32) error{
-//	myLogger.Logger.Print("subscribePartion len:", len(c.partitions))
-//	for _, partition := range c.partitions{
-//		requestData := &protocol.Client2Server{
-//			Key: protocol.Client2ServerKey_SubscribePartion,
-//			//Topic: partition.TopicName,
-//			Partition:   partition.Name,
-//			GroupName:   c.groupName,
-//			RebalanceId: rebalanceId,
-//		}
-//		conn, ok := c.getBrokerConn(&partition.Addr)
-//		if ok {
-//			myLogger.Logger.Print("subscribePartion success", requestData)
-//		}else{
-//			err := c.Connect2Broker(partition.Addr)
-//			if err != nil {
-//				myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
-//				continue
-//			}
-//			conn, _ = c.getBrokerConn(&partition.Addr)
-//			myLogger.Logger.Print("subscribePartion have not connect", partition.Addr)
-//		}
-//
-//		err := conn.Put(requestData)
-//		if err != nil {
-//			myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
-//			continue
-//		}
-//		//conn.writeChan <- requestData
-//	}
-//	return nil
-//
-//}
-

@@ -22,7 +22,7 @@ type consumerConn struct {
 	exitChan chan string
 }
 
-func newConn(addr string, consumer *Consumer)  (*consumerConn, error){
+func NewConn(addr string, consumer *Consumer)  (*consumerConn, error){
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -39,6 +39,8 @@ func newConn(addr string, consumer *Consumer)  (*consumerConn, error){
 
 	return c, nil
 }
+
+//连接处理函数
 func (c *consumerConn)Handle() {
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -54,16 +56,18 @@ func (c *consumerConn)Handle() {
 	myLogger.Logger.Print("connect end")
 	c.exit()
 }
+
+//退出连接
 func (c *consumerConn)exit()  {
-	c.consumer.removeBrokerConn(c)
+	c.consumer.deleteBrokerConn(c)
 	c.conn.Close()
 	close(c.writeChan)
 	close(c.exitChan)
 }
 
+//负责从broker读消息
 func (c *consumerConn)readLoop()  {
 	for{
-
 		cmd, msgBody, err:= protocalFuc.ReadAndUnPackClientServerProtoBuf(c.reader)
 		if err != nil {
 			if err == io.EOF {
@@ -77,126 +81,48 @@ func (c *consumerConn)readLoop()  {
 			myLogger.Logger.Printf("receive cmd: %s data: %s", cmd, msgBody)
 		}
 		c.consumer.readChan <- &readData{c.addr, cmd, msgBody}
-
-
-
-
-		//
-		//myLogger.Logger.Print("readLoop")
-		//tmp := make([]byte, 4)
-		//_, err := io.ReadFull(c.reader, tmp) //读取长度
-		//if err != nil {
-		//	if err == io.EOF {
-		//		myLogger.Logger.Print("EOF")
-		//	} else {
-		//		myLogger.Logger.Print(err)
-		//	}
-		//	c.exitChan <- "bye"
-		//	break
-		//}
-		//len := int32(binary.BigEndian.Uint32(tmp))
-		//myLogger.Logger.Printf("readLen %d ", len)
-		//requestData := make([]byte, len)
-		//_, err = io.ReadFull(c.reader, requestData) //读取内容
-		//if err != nil {
-		//	if err == io.EOF {
-		//		myLogger.Logger.Print("EOF")
-		//	} else {
-		//		myLogger.Logger.Print(err)
-		//	}
-		//	c.exitChan <- "bye"
-		//	break
-		//}
-		//server2ClientData := &protocol.Server2Client{}
-		//err = proto.Unmarshal(requestData, server2ClientData)
-		//if err != nil {
-		//	myLogger.Logger.Print("Unmarshal error %s", err)
-		//}else{
-		//	myLogger.Logger.Printf("receive data: %s", server2ClientData)
-		//}
-		//c.consumer.readChan <- &readData{c.addr, server2ClientData}
 	}
 }
 
+//负责写消息到broker
 func (c *consumerConn)writeLoop()  {
-	//var request *protocol.Client2Server
+	timeTicker := time.NewTicker(200 * time.Millisecond) //每200m秒触发一次
 	for{
 		select {
+		case <- timeTicker.C:
+			err := c.writer.Flush()
+			if err != nil{
+				myLogger.Logger.PrintError("writeLoop1:", err)
+			}
 		case request := <-c.writeChan:
-			c.writer.Write(request)
-			c.writer.Flush()
-
-			//data, err := proto.Marshal(request)
-			//if err != nil {
-			//	myLogger.Logger.Print("marshaling error: ", err)
-			//	continue
-			//}
-			//var buf [4]byte
-			//bufs := buf[:]
-			//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-			////c.writerLock.Lock()
-			//c.writer.Write(bufs)
-			//c.writer.Write(data)
-			//c.writer.Flush()
-			//c.writerLock.Unlock()
-			myLogger.Logger.Printf("write: %s", request)
+			myLogger.Logger.Printf("writeLoop1: %s", request)
+			_, err := c.writer.Write(request)
+			if err != nil{
+				myLogger.Logger.PrintError("writeLoop1:", err)
+			}
+			myLogger.Logger.Printf("writeLoop2: %s", request)
 		case <- c.exitChan:
 			goto exit
 
 		}
 	}
 	exit:
+		timeTicker.Stop()
 		myLogger.Logger.Printf("writeLoop exit:")
 }
+
+//往连接中放数据
 func (c *consumerConn) Put(data []byte) error{
 
 	select {
 	case c.writeChan <- data:
 		//myLogger.Logger.Print("do not have client")
-	case <-time.After(100 * time.Microsecond):
-		myLogger.Logger.PrintError("write controller2BrokerConn fail")
-		return errors.New("write controller2BrokerConn fail")
+	case <-time.After(2000 * time.Microsecond):
+		myLogger.Logger.PrintError("write fail")
+		return errors.New("write fail")
 	}
 
 	return nil
 
 }
 
-
-//func (c *consumerConn)readLoop()  {
-//	for{
-//		myLogger.Logger.Print("readLoop")
-//		tmp := make([]byte, 4)
-//		_, err := io.ReadFull(c.reader, tmp) //读取长度
-//		if err != nil {
-//			if err == io.EOF {
-//				myLogger.Logger.Print("EOF")
-//			} else {
-//				myLogger.Logger.Print(err)
-//			}
-//			c.exitChan <- "bye"
-//			break
-//		}
-//		len := int32(binary.BigEndian.Uint32(tmp))
-//		myLogger.Logger.Printf("readLen %d ", len)
-//		requestData := make([]byte, len)
-//		_, err = io.ReadFull(c.reader, requestData) //读取内容
-//		if err != nil {
-//			if err == io.EOF {
-//				myLogger.Logger.Print("EOF")
-//			} else {
-//				myLogger.Logger.Print(err)
-//			}
-//			c.exitChan <- "bye"
-//			break
-//		}
-//		server2ClientData := &protocol.Server2Client{}
-//		err = proto.Unmarshal(requestData, server2ClientData)
-//		if err != nil {
-//			myLogger.Logger.Print("Unmarshal error %s", err)
-//		}else{
-//			myLogger.Logger.Printf("receive data: %s", server2ClientData)
-//		}
-//		c.consumer.readChan <- &readData{c.addr, server2ClientData}
-//	}
-//}

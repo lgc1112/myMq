@@ -16,6 +16,7 @@ type topic struct {
 	maxPartitionNum int64
 }
 
+//新建topic
 func newTopic(name string, broker *Broker) *topic {
 	t := &topic{
 		broker : broker,
@@ -25,6 +26,7 @@ func newTopic(name string, broker *Broker) *topic {
 	return t
 }
 
+//删除topic的所有分区
 func (t *topic) deleteAllPartitions(){
 	//addr := broker.maddr.ClientListenAddr
 	t.partitionMapLock.Lock()
@@ -43,7 +45,7 @@ func (t *topic) deleteAllPartitions(){
 					},
 				}
 				err := brokerConn.Put(controller2BrokerData) //发送
-				if err != nil{ //该broker无法分配分区，换下一个
+				if err != nil{
 					myLogger.Logger.PrintWarning("delete partition cannot contact")
 				}
 			}
@@ -55,6 +57,7 @@ func (t *topic) deleteAllPartitions(){
 	return
 }
 
+//在该topic上新建分区
 func (t *topic) CreatePartitions(partitionNum int, addrs []string){
 	//addr := broker.maddr.ClientListenAddr
 	k := 0
@@ -66,7 +69,11 @@ func (t *topic) CreatePartitions(partitionNum int, addrs []string){
 		isNativePartition := addr == t.broker.maddr.ClientListenAddr
 
 		if !isNativePartition{
-			brokerConn, _ := t.broker.GetBrokerConn(&addr)
+			brokerConn, ok := t.broker.GetBrokerConn(&addr)
+			if !ok {
+				myLogger.Logger.PrintError("brokerConn not exist error")
+				return
+			}
 			controller2BrokerData := &protocol.Controller2Broker{ //创建分区的消息
 				Key: protocol.Controller2BrokerKey_CreadtPartition,
 				Partitions: &protocol.Partition{
@@ -80,7 +87,7 @@ func (t *topic) CreatePartitions(partitionNum int, addrs []string){
 				continue
 			}
 		}
-		partition := newPartition(partitionName, addr, isNativePartition, t.broker) //将分区轮询分配给不同的addr
+		partition := newPartition(partitionName, addr, isNativePartition, t.broker, t.name) //将分区轮询分配给不同的addr
 		t.partitionMapLock.Lock()
 		t.partitionMap[partitionName] = partition
 		t.partitionMapLock.Unlock()
@@ -90,6 +97,7 @@ func (t *topic) CreatePartitions(partitionNum int, addrs []string){
 	return
 }
 
+//获取分区
 func (t *topic) getPartition(partitionName *string) (*partition, bool) {
 	t.partitionMapLock.RLock()
 	partition, ok := t.partitionMap[*partitionName]
@@ -97,6 +105,21 @@ func (t *topic) getPartition(partitionName *string) (*partition, bool) {
 	return partition, ok
 }
 
+//删除分区
+func (t *topic) deletePartition(partitionName *string) {
+	t.partitionMapLock.RLock()
+	defer t.partitionMapLock.RUnlock()
+	_, ok := t.partitionMap[*partitionName]
+	if !ok {
+		myLogger.Logger.Print(t.name, " deletePartition not exist, remain len:", len(t.partitionMap))
+		return
+	}
+	delete(t.partitionMap, *partitionName)
+	myLogger.Logger.Print(t.name, "deletePartition success, remain len:", len(t.partitionMap))
+	return
+}
+
+//添加分区
 func (t *topic) AddPartition(partition *partition){
 	t.partitionMapLock.Lock()
 	t.partitionMap[partition.name] = partition
@@ -104,6 +127,7 @@ func (t *topic) AddPartition(partition *partition){
 	return
 }
 
+//获取topic的所有分区
 func (t *topic)getPartitions() []*protocol.Partition {
 	var partitions []*protocol.Partition
 	t.partitionMapLock.RLock()

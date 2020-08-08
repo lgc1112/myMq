@@ -186,7 +186,7 @@ func (b *broker2ControllerConn)readLoop() {
 				myLogger.Logger.PrintError("should not come here")
 				break
 			}
-			partition := newPartition(controller2BrokerData.Partitions.Name, controller2BrokerData.Partitions.Addr, true, b.broker) //创建分区
+			partition := newPartition(controller2BrokerData.Partitions.Name, controller2BrokerData.Partitions.Addr, true, b.broker, "") //创建分区
 			myLogger.Logger.Printf("Create Partition : %s", controller2BrokerData.Partitions.Name)
 			b.broker.addPartition(&controller2BrokerData.Partitions.Name, partition) //保存分区
 			response := &protocol.Broker2Controller{

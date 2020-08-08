@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 )
 
 type MyLogger struct {
+	sync.RWMutex
 	infoLogger *log.Logger
 	errorLogger *log.Logger
 	debugLogger *log.Logger
@@ -76,20 +78,26 @@ func New(logDir string) (*MyLogger, error) {
 }
 
 func (l *MyLogger) Print(v ...interface{}) {
-	fmt.Print("info:")
-	fmt.Print(v...)
-	fmt.Println()
-	l.infoLogger.Output(2, fmt.Sprint(v...))
+	//l.Lock()
+	//defer l.Unlock()
+	//fmt.Print("info:")
+	//fmt.Print(v...)
+	//fmt.Println()
+	//l.infoLogger.Output(2, fmt.Sprint(v...))
 }
 
 func (l *MyLogger) Printf(format string, v ...interface{}) {
-	fmt.Print("info:")
-	fmt.Printf(format, v...)
-	fmt.Println()
-	l.infoLogger.Output(2, fmt.Sprintf(format, v...))
+	//l.Lock()
+	//defer l.Unlock()
+	//fmt.Print("info:")
+	//fmt.Printf(format, v...)
+	//fmt.Println()
+	//l.infoLogger.Output(2, fmt.Sprintf(format, v...))
 }
 
 func (l *MyLogger) PrintfError(format string, v ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
 	fmt.Print("error:")
 	fmt.Printf(format, v...)
 	fmt.Println()
@@ -97,6 +105,8 @@ func (l *MyLogger) PrintfError(format string, v ...interface{}) {
 }
 
 func (l *MyLogger) PrintError(v ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
 	fmt.Print("error:")
 	fmt.Print(v...)
 	fmt.Println()
@@ -104,6 +114,8 @@ func (l *MyLogger) PrintError(v ...interface{}) {
 }
 
 func (l *MyLogger) PrintfDebug(format string, v ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
 	fmt.Print("Debug:")
 	fmt.Printf(format, v...)
 	fmt.Println()
@@ -111,6 +123,8 @@ func (l *MyLogger) PrintfDebug(format string, v ...interface{}) {
 }
 
 func (l *MyLogger) PrintDebug(v ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
 	fmt.Print("Debug:")
 	fmt.Print(v...)
 	fmt.Println()
@@ -118,6 +132,8 @@ func (l *MyLogger) PrintDebug(v ...interface{}) {
 }
 
 func (l *MyLogger) PrintfWarning(format string, v ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
 	fmt.Print("Warning:")
 	fmt.Printf(format, v...)
 	fmt.Println()
@@ -125,6 +141,8 @@ func (l *MyLogger) PrintfWarning(format string, v ...interface{}) {
 }
 
 func (l *MyLogger) PrintWarning(v ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
 	fmt.Print("Warning:")
 	fmt.Print(v...)
 	fmt.Println()

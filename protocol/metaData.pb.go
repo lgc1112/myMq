@@ -21,7 +21,7 @@ type MetaData struct {
 func (m *MetaData) Reset()                    { *m = MetaData{} }
 func (m *MetaData) String() string            { return proto.CompactTextString(m) }
 func (*MetaData) ProtoMessage()               {}
-func (*MetaData) Descriptor() ([]byte, []int) { return fileDescriptor6, []int{0} }
+func (*MetaData) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
 
 func (m *MetaData) GetTopics() []*Topic {
 	if m != nil {
@@ -45,7 +45,7 @@ type Topic struct {
 func (m *Topic) Reset()                    { *m = Topic{} }
 func (m *Topic) String() string            { return proto.CompactTextString(m) }
 func (*Topic) ProtoMessage()               {}
-func (*Topic) Descriptor() ([]byte, []int) { return fileDescriptor6, []int{1} }
+func (*Topic) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{1} }
 
 func (m *Topic) GetName() string {
 	if m != nil {
@@ -70,7 +70,7 @@ type Group struct {
 func (m *Group) Reset()                    { *m = Group{} }
 func (m *Group) String() string            { return proto.CompactTextString(m) }
 func (*Group) ProtoMessage()               {}
-func (*Group) Descriptor() ([]byte, []int) { return fileDescriptor6, []int{2} }
+func (*Group) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{2} }
 
 func (m *Group) GetName() string {
 	if m != nil {
@@ -99,9 +99,9 @@ func init() {
 	proto.RegisterType((*Group)(nil), "protocol.Group")
 }
 
-func init() { proto.RegisterFile("metaData.proto", fileDescriptor6) }
+func init() { proto.RegisterFile("metaData.proto", fileDescriptor3) }
 
-var fileDescriptor6 = []byte{
+var fileDescriptor3 = []byte{
 	// 217 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x6c, 0x8f, 0x4d, 0x6b, 0xc4, 0x20,
 	0x10, 0x86, 0x71, 0xd3, 0x2c, 0xbb, 0xb3, 0xf4, 0x03, 0x7b, 0x91, 0x9e, 0x24, 0x97, 0x4a, 0x0f,

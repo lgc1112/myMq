@@ -45,6 +45,8 @@ enum ClientServerCmd{
   CmdPushMsgReq = 24;
   CmdPushMsgRsp = 25;
 
+  CmdPublishWithoutAskReq = 26;
+  CmdPublishWithoutAskRsp = 27;
 }
 
 
@@ -163,7 +165,14 @@ message PushMsgRsp{
   string GroupName = 4;
 }
 
+message PublishWithoutAskReq{
+  string PartitionName = 1;
+  Message msg = 2;
+}
 
+message PublishWithoutAskResp{
+  RetStatus ret = 1;
+}
 //message CreatTopicReqInfo{
 //  RetStatus ret = 1;
 //  int32 PartitionNum = 2;

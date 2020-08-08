@@ -1,3 +1,26 @@
 syntax = "proto3";
 import "message.proto";
 package protocol;
+enum Controller2BrokerKey
+{
+  CreadtPartition = 0;
+  DeletePartition = 1;
+};
+message Controller2Broker{
+  Controller2BrokerKey key = 1;
+  Partition Partitions = 2;
+}
+
+enum Broker2ControllerKey
+{
+  Heartbeat = 0;
+  RegisterBroker = 1;
+  unRegisterBroker = 2;
+  CreadtPartitionSuccess = 3;
+  CreadtPartitionError = 4;
+};
+
+message Broker2Controller{
+  Broker2ControllerKey key = 1;
+  ListenAddr addr = 2;
+}

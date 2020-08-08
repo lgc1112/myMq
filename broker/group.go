@@ -138,7 +138,6 @@ func (g *group)deleteTopic(topic *topic)  {
 	}
 	g.subscribedTopics =  g.subscribedTopics[:j]
 	g.subscribedTopicsLock.Unlock()
-	//g.Rebalance()
 }
 
 func (g *group)notifyClients()  {
@@ -146,7 +145,6 @@ func (g *group)notifyClients()  {
 	g.clientsLock.Lock()
 	defer g.clientsLock.Unlock()
 	for _, client := range g.clients{
-
 		req := &protocol.ChangeConsumerPartitionReq{
 			Partitions: g.client2PartitionMap[client.id],
 			RebalanceId: g.rebalanceID,
@@ -169,66 +167,26 @@ func (g *group)notifyClients()  {
 		case <-time.After(100 * time.Microsecond):
 			myLogger.Logger.PrintWarning("notifyClient fail")
 		}
-		//tmp := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-		//	Partitions: g.client2PartitionMap[client.id],
-		//	RebalanceId: g.rebalanceID,
-		//}
-		//response, err := proto.Marshal(tmp)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return
-		//}
-		//writeCmdChan := client.getWriteCmdChan()
-		//select {
-		//case writeCmdChan <- response:
-		//	//myLogger.Logger.Print("do not have client")
-		//case <-time.After(100 * time.Microsecond):
-		//	myLogger.Logger.PrintWarning("notifyClient fail")
-		//	return
-		//}
 
 	}
 	myLogger.Logger.Print("notifyClients end")
 }
 
-//func (g *group)notifyClients()  {
-//	myLogger.Logger.Print("notifyClients ")
-//	g.clientsLock.Lock()
-//	defer g.clientsLock.Unlock()
-//	for _, client := range g.clients{
-//		tmp := &protocol.Server2Client{
-//			Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-//			Partitions: g.client2PartitionMap[client.id],
-//			RebalanceId: g.rebalanceID,
-//		}
-//		response, err := proto.Marshal(tmp)
-//		if err != nil {
-//			myLogger.Logger.PrintError("marshaling error: ", err)
-//			return
-//		}
-//		select {
-//		case client.writeCmdChan <- response:
-//			//myLogger.Logger.Print("do not have client")
-//		case <-time.After(100 * time.Microsecond):
-//			myLogger.Logger.PrintWarning("notifyClient fail")
-//			return
-//		}
-//
-//	}
-//	myLogger.Logger.Print("notifyClients end")
-//}
-
 func (g *group)Rebalance(){
 	myLogger.Logger.Print("rebalance")
 	k := 0
+
+
+	tmpMap:= make(map[int64] []*protocol.Partition)
+	g.subscribedTopicsLock.RLock()
+	g.clientsLock.Lock()
 	clientNum := len(g.clients)
 	if clientNum == 0{
 		myLogger.Logger.Print("do not have client")
+		g.clientsLock.Unlock()
+		g.subscribedTopicsLock.RUnlock()
 		return
 	}
-	tmpMap:= make(map[int64] []*protocol.Partition)
-	g.subscribedTopicsLock.RLock()
 	for _, topic := range g.subscribedTopics { //取出该消费者组订阅的所有topic
 		topic.partitionMapLock.RLock()
 		for _, partition := range topic.partitionMap {//取出所有topic的所有分区
@@ -242,6 +200,7 @@ func (g *group)Rebalance(){
  		}
 		topic.partitionMapLock.RUnlock()
 	}
+	g.clientsLock.Unlock()
 	g.subscribedTopicsLock.RUnlock()
 	g.client2PartitionMap = tmpMap
 	atomic.AddInt32(&g.rebalanceID, 1)//更新id

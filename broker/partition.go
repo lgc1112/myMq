@@ -12,6 +12,7 @@ type partition struct {
 	sync.RWMutex
 	name string
 	addr string
+	belongtopic string
 	subscribedGroupsLock sync.RWMutex
 	subscribedGroups map[string] *subscribedGroup //groupName -> *subscribedGroup
 	curMsgId int32
@@ -25,6 +26,7 @@ type partition struct {
 	exitChan chan string
 
 	isNativePartition bool //判断该分区是否在本地broker中
+	queueSize int
 }
 
 const (
@@ -35,13 +37,15 @@ type msgAskData struct {
 	msgId int32
 	groupName string
 }
-func newPartition(name string, addr string, isNativePartiton bool, broker *Broker)  *partition{
+func newPartition(name string, addr string, isNativePartiton bool, broker *Broker, belongtopic string)  *partition{
 	if !isNativePartiton{ //不是本地的分区
 		partition := &partition{
 			name : name,
 			addr : addr,
 			broker: broker,
+			queueSize : broker.queueSize,
 			isNativePartition:isNativePartiton,
+			belongtopic :belongtopic,
 		}
 		return partition
 	}
@@ -123,7 +127,7 @@ func (p *partition) readLoop()  {
 			p.subscribedGroupsLock.RLock()
 			if msg.Priority > 0{//这是优先级消息，需先判断消息是否可保存的优先队列
 				for grpName, subGrp := range p.subscribedGroups{
-					if subGrp.priorityQueue.Len() > queueSize - 2{//写不下了，需拒绝这条消息
+					if subGrp.priorityQueue.Len() > p.queueSize - 2{//写不下了，需拒绝这条消息
 						myLogger.Logger.Printf("group %s is full", grpName)
 
 						rsp := &protocol.PushMsgRsp{
@@ -140,18 +144,8 @@ func (p *partition) readLoop()  {
 							continue
 						}
 						myLogger.Logger.Printf("write: %s", rsp)
-						//response := reqData
-
-
-						//response := &protocol.Server2Client{
-						//	Key: protocol.Server2ClientKey_PriorityQueueFull,
-						//}
-						//data, err := proto.Marshal(response)
-						//if err != nil {
-						//	myLogger.Logger.PrintError("marshaling error: ", err)
-						//	continue
-						//}
 						p.responseChan <- reqData
+						p.subscribedGroupsLock.RUnlock()
 						goto OuterLoop
 					}
 				}
@@ -160,6 +154,7 @@ func (p *partition) readLoop()  {
 				myLogger.Logger.Printf("send msg to subscribedGroups %s", grpName)
 				subGrp.readChan <- internalMsg
 			}
+			p.subscribedGroupsLock.RUnlock()
 
 			rsp := &protocol.PushMsgRsp{
 				Ret: protocol.RetStatus_Successs,
@@ -174,19 +169,9 @@ func (p *partition) readLoop()  {
 				myLogger.Logger.PrintError("marshaling error", err)
 				continue
 			}
-			myLogger.Logger.Printf("write: %s", rsp)
+			myLogger.Logger.Printf("write: %s %s", protocol.ClientServerCmd_CmdPushMsgRsp, rsp)
 
-
-			//response := &protocol.Server2Client{
-			//	Key: protocol.Server2ClientKey_PublishSuccess,
-			//}
-			//data, err := proto.Marshal(response)
-			//if err != nil {
-			//	myLogger.Logger.PrintError("marshaling error: ", err)
-			//	continue
-			//}
 			p.responseChan <- reqData
-			p.subscribedGroupsLock.RUnlock()
 		}
 	}
 exit:
@@ -271,7 +256,7 @@ func (p *partition) addComsummerClient(client *client, groupName string, rebalan
 	subscribedGroup.rebalanceId = rebalanceId
 	waitFinished := make(chan bool)
 
-	subscribedGroup.clientChangeChan <- &clientChange{true, client, waitFinished}//放到partitiongroup的readLoop协程中进行处理，避免频繁使用锁
+	subscribedGroup.clientChangeChan <- &clientChange{true, client, waitFinished}//放到partitiongroup的readLoop协程中进行处理
 	<- waitFinished //等待处理
 	p.subscribedGroupsLock.Unlock()
 

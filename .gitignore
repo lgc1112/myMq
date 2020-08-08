@@ -2,4 +2,5 @@
 bin/*
 */log/*
 */data/*
-data/*
+*data/*
+*log/*

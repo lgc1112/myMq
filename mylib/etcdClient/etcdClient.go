@@ -13,10 +13,11 @@ import (
 )
 
 const prefix = "/election"
-const masterAddrKey = "/masterAddr"
+const controllerAddrKey = "/controllerAddr"
 const metaDataKey = "/metaData"
-var endpoints = []string{"9.135.8.253:2379"}
-
+const campaignTTL = 10 //竞选节点维护时间
+//
+//var endpoints = []string{defaultEtcdAddr}
 type EtcdListener interface {
 	ChangeControllerAddr(*protocol.ListenAddr)
 	BecameNormalBroker()
@@ -29,8 +30,9 @@ type EtcdClient struct{
 	IsLeader bool
 }
 
-func NewEtcdClient(broker EtcdListener, needCampaign bool) (*EtcdClient, error){
-	client, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 5 * time.Second})
+//新建etcd连接
+func NewEtcdClient(broker EtcdListener, etcdAddr *string) (*EtcdClient, error){
+	client, err := clientv3.New(clientv3.Config{Endpoints: []string{*etcdAddr}, DialTimeout: 5 * time.Second})
 	if err != nil {
 		myLogger.Logger.Print(err)
 		return nil, err
@@ -40,13 +42,12 @@ func NewEtcdClient(broker EtcdListener, needCampaign bool) (*EtcdClient, error){
 		broker: broker,
 		client: client,
 	}
-	if needCampaign{
-		go e.campaign(prefix, "1")	
-	}
-	go e.watcher()
+	go e.campaign(prefix, "1") //竞选controller协程
+	go e.watcher() //监听controller地址变化协程
 	return e, nil
 }
 
+//保存集群元数据
 func (e *EtcdClient)PutMetaData(val string)  error{
 	//var putResp *clientv3.PutResponse
 	if _, err := e.client.Put(context.TODO(), metaDataKey, val); err != nil {
@@ -56,10 +57,21 @@ func (e *EtcdClient)PutMetaData(val string)  error{
 	return nil
 }
 
+//修改topic的分区
+func (e *EtcdClient)PutPatitions(key string, val string)  error{
+	//var putResp *clientv3.PutResponse
+	if _, err := e.client.Put(context.TODO(), topicAddrKey + "/" + key, val); err != nil {
+		myLogger.Logger.PrintError(err)
+		return err
+	}
+	return nil
+}
+
+//修改controller地址
 func (e *EtcdClient)PutControllerAddr(addr *protocol.ListenAddr)  error{
 	//var putResp *clientv3.PutResponse
 	data, err := proto.Marshal(addr)
-	if _, err = e.client.Put(context.TODO(), masterAddrKey, string(data)); err != nil {
+	if _, err = e.client.Put(context.TODO(), controllerAddrKey, string(data)); err != nil {
 		myLogger.Logger.PrintError(err)
 		return err
 	}
@@ -67,10 +79,11 @@ func (e *EtcdClient)PutControllerAddr(addr *protocol.ListenAddr)  error{
 	return nil
 }
 
+//获取controller地址
 func (e *EtcdClient)GetControllerAddr()  (*protocol.ListenAddr, error){
 	var getResp *clientv3.GetResponse
 	var err error
-	if getResp, err = e.client.Get(context.TODO(), masterAddrKey); err != nil {
+	if getResp, err = e.client.Get(context.TODO(), controllerAddrKey); err != nil {
 		myLogger.Logger.PrintError(err)
 		return nil, err
 	}
@@ -83,22 +96,21 @@ func (e *EtcdClient)GetControllerAddr()  (*protocol.ListenAddr, error){
 			return nil, err
 		}
 	}
-	// 获得当前revision
-	//watchStartRevision := getResp.Header.Revision + 1
 
 	myLogger.Logger.Print("GetmasterAddr:", listenAddr)
-	//myLogger.Logger.Print("从该版本向后监听:", watchStartRevision)
 	return listenAddr, nil
 }
 
+//清除元数据
 func (e *EtcdClient)ClearMetaData()  {
-	if _, err := e.client.Delete(context.TODO(), metaDataKey, clientv3.WithPrevKV()); err != nil {
+	if _, err := e.client.Delete(context.TODO(), metaDataKey); err != nil {
 		myLogger.Logger.PrintError(err)
 		return
 	}
 }
+
+//获取元数据
 func (e *EtcdClient)GetMetaData() ([]byte, error){
-	//e.clearMetaData()
 	var getResp *clientv3.GetResponse
 	var err error
 	if getResp, err = e.client.Get(context.TODO(), metaDataKey); err != nil {
@@ -114,8 +126,8 @@ func (e *EtcdClient)GetMetaData() ([]byte, error){
 	}
 }
 
+//监听controller变化协程
 func (e *EtcdClient)watcher()  {
-	//e.GetmasterAddr()
 
 	watcher := clientv3.NewWatcher(e.client)
 
@@ -125,7 +137,8 @@ func (e *EtcdClient)watcher()  {
 	//	cancelFunc()
 	//})
 
-	watchRespChan := watcher.Watch(ctx, masterAddrKey)
+	watchRespChan := watcher.Watch(ctx, controllerAddrKey)
+	//watcher.Watch(ctx, controllerAddrKey)
 	myLogger.Logger.Print("startWatch...")
 	for{
 		select {
@@ -145,7 +158,7 @@ func (e *EtcdClient)watcher()  {
 				case mvccpb.DELETE:
 					myLogger.Logger.Print("删除了", "Revision:", event.Kv.ModRevision)
 				default:
-					myLogger.Logger.Print("efwf")
+					myLogger.Logger.Print(event.Type)
 				}
 			}
 		}
@@ -153,9 +166,10 @@ func (e *EtcdClient)watcher()  {
 	myLogger.Logger.Print("bye")
 }
 
+//竞选协程
 func (e *EtcdClient)campaign( election string, prop string) {
 	for {
-		s, err := concurrency.NewSession(e.client, concurrency.WithTTL(15))
+		s, err := concurrency.NewSession(e.client, concurrency.WithTTL(campaignTTL))
 		if err != nil {
 			myLogger.Logger.Print(err)
 			continue
@@ -172,8 +186,6 @@ func (e *EtcdClient)campaign( election string, prop string) {
 		e.IsLeader = true //选举成功
 
 		e.broker.BecameController() //竞选成为master
-		//err := e.PutmasterAddr(e.broker.addr)
-
 
 		select {
 		case <-s.Done(): //是否变为普通broker

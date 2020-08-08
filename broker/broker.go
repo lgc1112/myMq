@@ -14,18 +14,18 @@ import (
 	"sync/atomic"
 	"time"
 )
-const logDir string = "./broker/"
+const logDir string = "./broker"
 const openCluster bool = true
 const defaultClientListenAddr = "0.0.0.0:12345" //client监听地址
 const defaultBrokerListenAddr = "0.0.0.0:12346" //broker监听地址
-
+const defaultEtcdAddr ="9.135.8.253:2379" //etcd服务器地址
+const defaultQueueSize = 1024*1024*10//队列大小
 type Broker struct {
 	isController bool
 	Id string
 
 	maxClientId int64
 
-	//addr string
 	maddr *protocol.ListenAddr //我的监听地址
 	controllerAddr string //master的监听地址
 	clientTcpServer     *clientTcpServer //client
@@ -49,7 +49,6 @@ type Broker struct {
 	tcpListener   net.Listener
 	wg sync.WaitGroup
 
-	readChan     chan *readData
 	clientChangeChan     chan *clientChange
 
 	exitSignal chan os.Signal
@@ -60,6 +59,8 @@ type Broker struct {
 	etcdClient *etcdClient.EtcdClient
 
 	broker2ControllerConn *broker2ControllerConn
+
+	queueSize int
 }
 type clientChange struct {
 	isAdd bool
@@ -67,15 +68,14 @@ type clientChange struct {
 	waitFinished  chan bool
 }
 
-type readData struct {
-	clientID int64
-	client2serverData *protocol.Client2Server
-}
 
 func New(exitSignal chan os.Signal) (*Broker, error) {
-	clientListenAddr := flag.String("clientListenAddr", defaultClientListenAddr, "ip:port")
-	brokerListenAddr := flag.String("brokerListenAddr", defaultBrokerListenAddr, "ip:port")
+	clientListenAddr := flag.String("clientListenAddr", defaultClientListenAddr, "ip:port") //客户端服务器监听地址
+	brokerListenAddr := flag.String("brokerListenAddr", defaultBrokerListenAddr, "ip:port")//broker服务器监听地址
+	etcdAddr := flag.String("etcdAddr", defaultEtcdAddr, "ip:port")//etcd地址
+	queueSize := flag.Int("queueSize", defaultQueueSize, "bytes")
 	flag.Parse() //解析参数
+
 
 
 	host, port, _ := net.SplitHostPort(*clientListenAddr)
@@ -91,27 +91,22 @@ func New(exitSignal chan os.Signal) (*Broker, error) {
 		//fmt.Println(*brokerListenAddr)
 	}
 
-
-
 	broker := &Broker{
 		Id:Id,
 		topicMap: make(map[string]*topic),
 		groupMap: make(map[string]*group),
 		clientMap: make(map[int64]*client),
 		partitionMap: make(map[string]*partition),
-		readChan: make(chan *readData),
 		aliveBrokerMap: make(map[string] *controller2BrokerConn),
 		clientChangeChan: make(chan *clientChange),
 		maddr: &protocol.ListenAddr{
 			ClientListenAddr: *clientListenAddr,
 			BrokerListenAddr: *brokerListenAddr,
 		},
-		//addr: *addr,
 		exitSignal: exitSignal,
-		//exitChan: make(chan string, 2),
+		queueSize : *queueSize,
 	}
 
-	_, port, _ = net.SplitHostPort(*clientListenAddr)
 	_, err:= myLogger.New(logDir + broker.Id + "log/")
 	myLogger.Logger.Print(*clientListenAddr, " ", *brokerListenAddr)
 
@@ -119,22 +114,24 @@ func New(exitSignal chan os.Signal) (*Broker, error) {
 	tcpServer := newClientTcpServer(broker, *clientListenAddr)
 	broker.clientTcpServer = tcpServer
 	if openCluster{
-		broker.etcdClient, err = etcdClient.NewEtcdClient(broker, true)
+		broker.etcdClient, err = etcdClient.NewEtcdClient(broker,  etcdAddr) //连接到etcd
 		broker.etcdClient.ClearMetaData()
 		time.Sleep(1 * time.Second) //等待一会，看能竞选成为controller
 		if !broker.isController{ //没有竞选成为controller，需要连接到controller
-
-			masterAddr, err := broker.etcdClient.GetControllerAddr()
+			masterAddr, err := broker.etcdClient.GetControllerAddr() //读取controller的地址
 			if err != nil{
 				myLogger.Logger.PrintError(err)
 			}else{
-				if masterAddr.BrokerListenAddr != broker.maddr.BrokerListenAddr{
+				if masterAddr.BrokerListenAddr != broker.maddr.BrokerListenAddr{ //当前我不是master,否则继续等待竞选结果
 					broker.controllerAddr = masterAddr.BrokerListenAddr
 					broker.connect2Controller(broker.controllerAddr)
+					myLogger.Logger.PrintDebug("竞选失败，成为普通broker")
 				}
 			}
 
 		}
+	}else{
+		//broker.connect2Controller() //不需要连接controller
 	}
 	return broker, err
 
@@ -156,7 +153,8 @@ func getIntranetIp() string{
 	}
 	return "0.0.0.0"
 }
-func (b *Broker)retrieveMetaData(){
+
+func (b *Broker)retrieveMetaData(){ //恢复集群数据
 	metaData := &protocol.MetaData{}
 	data, err := b.etcdClient.GetMetaData()
 	if err != nil {
@@ -177,7 +175,7 @@ func (b *Broker)retrieveMetaData(){
 			b.partitionMapLock.Lock()
 			partition, ok := b.partitionMap[p.Name]
 			if !ok { //该分区不存在，新建
-				partition = newPartition(p.Name, p.Addr, p.Addr == b.maddr.ClientListenAddr, b)
+				partition = newPartition(p.Name, p.Addr, p.Addr == b.maddr.ClientListenAddr, b, t.Name)
 				b.partitionMap[p.Name] = partition
 			}
 			topic.AddPartition(partition) //保存分区到topic
@@ -237,6 +235,7 @@ func (b *Broker) BecameController()  { //竞选成功时调用
 		myLogger.Logger.PrintError(err)
 		return
 	}
+	myLogger.Logger.PrintDebug("竞选成功，成为Controller")
 	myLogger.Logger.Print("BecameController")
 }
 
@@ -270,6 +269,7 @@ func (b *Broker)persistMetaData(){
 		g := &protocol.Group{
 			Name: groupName,
 			SubscribedTopics:group.getSubscribedTopics(),
+			RebalanceID: group.rebalanceID,
 		}
 		metaData.Groups = append(metaData.Groups, g)
 	}
@@ -341,22 +341,80 @@ func (b *Broker) getPartition(partitionName *string) (*partition, bool) {
 	return partition, ok
 }
 
-func (b *Broker)getPartitionForBroker(addr *string) []*protocol.Partition {
+//
+//func (b *Broker)GetAllPartitions() []*protocol.Partition {
+//	var partitions []*protocol.Partition
+//	b.partitionMapLock.RLock()
+//	for _, par := range b.partitionMap{
+//		tmp := &protocol.Partition{
+//			Name: par.name,
+//			Addr: par.addr,
+//		}
+//		partitions = append(partitions, tmp)
+//	}
+//	b.partitionMapLock.RUnlock()
+//	return partitions
+//}
+
+func (b *Broker)GetAndAddPartitionForBroker(addr *string) ([]*protocol.Partition, *map[string]bool){
+	if !b.isController{
+		myLogger.Logger.PrintWarning("try to deletePartitionForBroker int normal Broker")
+		return nil, nil
+	}
 	var partitions []*protocol.Partition
+	var dirtyTopics = make(map[string]bool)
 	b.partitionMapLock.RLock()
 	for _, par := range b.partitionMap{
-		if par.addr == *addr{ //取得该broker的地址
+		if par.addr == *addr{ //broker上的地址
 			tmp := &protocol.Partition{
 				Name: par.name,
 				Addr: par.addr,
 			}
 			partitions = append(partitions, tmp)
+			topic, _ := b.getTopic(&par.belongtopic)
+			topic.AddPartition(par) //从topic上添加
+			dirtyTopics[topic.name] = true //记录修改过的topic
 		}
 	}
 	b.partitionMapLock.RUnlock()
-	return partitions
+	return partitions, &dirtyTopics
 }
 
+func (b *Broker)GetAndDeletePartitionForBroker(addr *string) {
+	if !b.isController{
+		myLogger.Logger.PrintWarning("try to deletePartitionForBroker int normal Broker")
+		return
+	}
+	myLogger.Logger.Print("deletePartitionForBroker")
+	var dirtyTopics = make(map[string]bool)
+	b.partitionMapLock.RLock()
+	for _, par := range b.partitionMap{
+		if par.addr == *addr{ //broker上的地址，需删除
+			topic, _ := b.getTopic(&par.belongtopic)
+			topic.deletePartition(&par.name) //从topic上删除该分区
+			dirtyTopics[topic.name] = true //记录修改过的topic
+		}
+	}
+	b.partitionMapLock.RUnlock()
+	if openCluster{
+		for topicName, _ := range dirtyTopics{ //修改过的分区需上传的etcd
+			topic, _ := b.getTopic(&topicName)
+			pars := &protocol.Partitions{ //创建分区的消息
+				Partition: topic.getPartitions(),
+			}
+			data, err := proto.Marshal(pars)
+			if err != nil {
+				myLogger.Logger.PrintError("marshaling error: ", err)
+				continue
+			}
+			myLogger.Logger.Print(topicName, " Put Patitions : ", pars)
+			b.etcdClient.PutPatitions(topicName, string(data)) //将分区改变保存到集群
+		}
+	}
+
+
+	return
+}
 func (b *Broker) addPartition(partitionName *string, partition *partition){
 	b.partitionMapLock.Lock()
 	b.partitionMap[*partitionName] = partition
@@ -443,16 +501,11 @@ func (b *Broker) closeClients()  {
 			myLogger.Logger.PrintError("client close err:", err)
 		}
 	}
-
-	//myLogger.Logger.PrintDebug("remove broker Client success, remain len:", len(b.clientMap))
-	//myLogger.Logger.Print("close broker Client success, remain len:", len(b.clientMap))
 }
 func (b *Broker) exit()  {
 	b.partitionMapLock.RLock()
 	for _, partition := range b.partitionMap {
 		partition.exit()
-		//partition.exitChan <- "bye par"
-		//<- partition.exitFinishedChan
 	}
 	b.partitionMapLock.RUnlock()
 
@@ -515,7 +568,7 @@ func (b *Broker) IsbrokerAlive(brokerAddr *string) bool{
 }
 
 func (b *Broker) ReadLoop() {
-	var data *readData
+	//var data *readData
 	for{
 		myLogger.Logger.Print("Broker readLoop")
 		select {
@@ -526,11 +579,10 @@ func (b *Broker) ReadLoop() {
 			b.closeClients()  //关闭所有client
 			//goto exit
 			if b.needExit && len(b.clientMap) == 0{ //没有client，直接退出了,要等所有client退出我才能退出readLoop，否则会出bug
-				//myLogger.Logger.Print("bye 2")
 				b.exit()
 				goto exit
 			}
-		case tmp := <- b.clientChangeChan: //所有对clientMap的操作都放到这个协程来处理
+		case tmp := <- b.clientChangeChan: //所有对clientMap的操作
 			myLogger.Logger.Print("here")
 			if tmp.isAdd{
 				b.addClient(tmp.client)
@@ -544,43 +596,6 @@ func (b *Broker) ReadLoop() {
 				}
 			}
 			tmp.waitFinished <- true
-		case data = <- b.readChan:
-			//if b.needExit {
-			//	continue //需要关闭了，不再处理新消息
-			//}
-			//clientConn, ok := b.getClient(data.clientID)
-			//if !ok {
-			//	myLogger.Logger.Print("client conn have close", data)
-			//	continue
-			//}
-			//
-			//myLogger.Logger.Print("Broker read new data")
-			//
-			//
-			//var response []byte
-			switch data.client2serverData.Key {
-			//case protocol.Client2ServerKey_CreatTopic:
-			//	//response = b.creatTopic(data)
-			//case protocol.Client2ServerKey_DeleteTopic:
-			//	//response = b.deleteTopic2(data)
-			//case protocol.Client2ServerKey_GetPublisherPartition:
-			//	//response = b.getPublisherPartition(data)
-			//case protocol.Client2ServerKey_GetConsumerPartition:
-			//	//response = b.getConsumerPartition(data)
-			//case protocol.Client2ServerKey_SubscribePartion:
-			//	//response = b.subscribePartition(data)
-			//case protocol.Client2ServerKey_SubscribeTopic:
-			//	//response = b.subscribeTopic(data)
-			//case protocol.Client2ServerKey_RegisterConsumer:
-			//	//response = b.registerConsumer(data)
-			//case protocol.Client2ServerKey_UnRegisterConsumer:
-			//	//response = b.unRegisterConsumer(data)
-			default:
-				myLogger.Logger.Print("cannot find key")
-			}
-			//if response != nil{
-			//	clientConn.writeCmdChan <- response
-			//}
 		}
 		
 		
@@ -591,13 +606,11 @@ func (b *Broker) ReadLoop() {
 
 
 
-func (b *Broker)  deleteTopic2(topicName string)  (response []byte) {
+func (b *Broker)  DeleteTopic(topicName string)  (response []byte) {
 	if !b.isController{
 		myLogger.Logger.PrintWarning("try to deleteTopic int normal Broker")
 		return nil
 	}
-	//request := data.client2serverData
-	//topicName := request.Topic
 	topic, ok := b.getTopic(&topicName)
 	if !ok {
 		myLogger.Logger.Printf("try to delete not existed topic : %s", topicName)
@@ -610,7 +623,7 @@ func (b *Broker)  deleteTopic2(topicName string)  (response []byte) {
 			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
 		}
-		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdCreatTopicRsp, data)
+		reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdDeleteTopicRsp, data)
 		if err != nil {
 			myLogger.Logger.PrintError("marshaling error", err)
 			return nil
@@ -618,16 +631,6 @@ func (b *Broker)  deleteTopic2(topicName string)  (response []byte) {
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
 
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_TopicNotExisted,
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
 	} else {
 		topic.deleteAllPartitions()
 
@@ -646,31 +649,17 @@ func (b *Broker)  deleteTopic2(topicName string)  (response []byte) {
 		}
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_Success,
-		//	Topic: topicName,
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
 		b.deleteTopic(&topicName)
 	}
 	return response
 }
 
 
-func (b *Broker)  creatTopic(topicName string, partitionNum int32)  (response []byte) {
+func (b *Broker)  CreatTopic(topicName string, partitionNum int32)  (response []byte) {
 	if !b.isController{
 		myLogger.Logger.PrintWarning("try to creatTopic int normal Broker")
 		return nil
 	}
-	//request := data.client2serverData
-	//topicName := request.Topic
-	//partitionNum := request.PartitionNum
 	topic, ok := b.getTopic(&topicName)
 	if ok {
 		myLogger.Logger.Printf("try to create existed topic : %s %d", topicName, int(partitionNum))
@@ -689,17 +678,6 @@ func (b *Broker)  creatTopic(topicName string, partitionNum int32)  (response []
 		}
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_TopicExisted,
-		//	//Partitions: topic.getPartitions(),
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
 
 	} else {
 		myLogger.Logger.Printf("create topic : %s %d", topicName, int(partitionNum))
@@ -730,46 +708,16 @@ func (b *Broker)  creatTopic(topicName string, partitionNum int32)  (response []
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
 
-
-		//
-		//
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_SendPartions,
-		//	Topic: topicName,
-		//	Partitions: topic.getPartitions(),
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
-		//b.groupMapLock.RLock()
-		//defer b.groupMapLock.RUnlock()
-		//for _, group := range b.groupMap{
-		//	topics := group.getSubscribedTopics()
-		//	for _, t := range topics{
-		//		if t == topic.name{//检查是否有消费者以订阅该topic
-		//			topic.partitionMapLock.RLock()
-		//			for _, p := range topic.partitionMap{
-		//				p.addComsummerGroup(group.name) //添加消费者组
-		//			}
-		//			topic.partitionMapLock.RUnlock()
-		//		}
-		//	}
-		//}
 	}
 	return response
 }
 
 
-func (b *Broker)  getPublisherPartition(topicName string)   (response []byte) {
+func (b *Broker)  GetPublisherPartition(topicName string)   (response []byte) {
 	if !b.isController{
 		myLogger.Logger.PrintWarning("try to getPublisherPartition int normal Broker")
 		return nil
 	}
-	//request := data.client2serverData
-	//topicName := request.Topic
 	topic, ok := b.getTopic(&topicName)
 	if ok {
 		myLogger.Logger.Printf("getPublisherPartition : %s", topicName)
@@ -791,23 +739,6 @@ func (b *Broker)  getPublisherPartition(topicName string)   (response []byte) {
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
 
-
-
-
-
-
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_SendPartions,
-		//	Topic: topicName,
-		//	Partitions: topic.getPartitions(),
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
 	} else {
 		myLogger.Logger.Printf("Partition Not existed : %s", topicName)
 
@@ -826,28 +757,15 @@ func (b *Broker)  getPublisherPartition(topicName string)   (response []byte) {
 		}
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
-
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_TopicNotExisted,
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
 	}
 	return response
 }
 
-func (b *Broker)  getConsumerPartition(groupName string, clientID int64)   (response []byte) {
+func (b *Broker)  GetConsumerPartition(groupName string, clientID int64)   (response []byte) {
 	if !b.isController{
 		myLogger.Logger.PrintWarning("try to getConsumerPartition int normal Broker")
 		return nil
 	}
-	//request := data.client2serverData
-	//groupName := request.GroupName
 	group, ok := b.getGroup(&groupName)
 	myLogger.Logger.Printf("registerComsummer : %s", groupName)
 	if !ok {
@@ -877,34 +795,17 @@ func (b *Broker)  getConsumerPartition(groupName string, clientID int64)   (resp
 	}
 	myLogger.Logger.Printf("write: %s", rsp)
 	response = reqData
-
-
-
-	//data := &protocol.Server2Client{
-	//	Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-	//	Partitions: partitions,
-	//}
-	//var err error
-	//response, err = proto.Marshal(data)
-	//if err != nil {
-	//	myLogger.Logger.PrintError("marshaling error: ", err)
-	//	return nil
-	//}
 	return response
 }
 
-func (b *Broker)  subscribeTopic(topicName string, groupName string, clientID int64)   (response []byte) {
+func (b *Broker)  SubscribeTopic(topicName string, groupName string, clientID int64)   (response []byte) {
 	if !b.isController{
 		myLogger.Logger.PrintWarning("try to subscribeTopic int normal Broker")
 		return nil
 	}
-	//request := data.client2serverData
-	//topicName := request.Topic
 	topic, ok := b.getTopic(&topicName)
 	if !ok {
 		myLogger.Logger.Printf("Topic Not existed : %s", topicName, len(b.topicMap))
-
-
 		rsp := &protocol.SubscribePartitionRsp{
 			Ret: protocol.RetStatus_Fail,
 		}
@@ -920,20 +821,9 @@ func (b *Broker)  subscribeTopic(topicName string, groupName string, clientID in
 		}
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_Error,
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
 		return response
 	}
 
-	//groupName := request.GroupName
 	group, ok := b.getGroup(&groupName)
 	myLogger.Logger.Printf("registerComsummer : %s", groupName)
 	if !ok {
@@ -955,26 +845,16 @@ func (b *Broker)  subscribeTopic(topicName string, groupName string, clientID in
 	}else{
 		group.Rebalance()
 		return nil
-		//response = &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_TopicExisted,
-		//}
-		//return response
 	}
 }
 
 
-func (b *Broker)  subscribePartition(partitionName string, groupName string, clientID int64, RebalanceId int32)   (response []byte) {
-	//request := data.client2serverData
-	////topicName := request.Topic
-	//partitionName := request.Partition
-	//groupName := request.GroupName
+func (b *Broker)  SubscribePartition(partitionName string, groupName string, clientID int64, RebalanceId int32)   (response []byte) {
 	b.partitionMapLock.RLock()
 	defer b.partitionMapLock.RUnlock()
 	partition, ok := b.getPartition(&partitionName)
 	if !ok {
 		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
-
-
 
 		rsp := &protocol.SubscribePartitionRsp{
 			Ret: protocol.RetStatus_Fail,
@@ -991,20 +871,8 @@ func (b *Broker)  subscribePartition(partitionName string, groupName string, cli
 		}
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
-
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_Error,
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
-		//return response
 	}else{
-		for !partition.isNativePartition{
+		if !partition.isNativePartition{
 			myLogger.Logger.PrintError("subscribePartition is not native:", partition.name, partition.addr)
 			rsp := &protocol.SubscribePartitionRsp{
 				Ret: protocol.RetStatus_Fail,
@@ -1021,17 +889,6 @@ func (b *Broker)  subscribePartition(partitionName string, groupName string, cli
 			}
 			myLogger.Logger.Printf("write: %s", rsp)
 			response = reqData
-
-
-			//data := &protocol.Server2Client{
-			//	Key: protocol.Server2ClientKey_Error,
-			//}
-			//var err error
-			//response, err = proto.Marshal(data)
-			//if err != nil {
-			//	myLogger.Logger.PrintError("marshaling error: ", err)
-			//	return nil
-			//}
 			return response
 		}
 		if partition.getGroupRebalanceId(groupName) > RebalanceId{//不是最新的，丢弃
@@ -1061,23 +918,12 @@ func (b *Broker)  subscribePartition(partitionName string, groupName string, cli
 		}
 		myLogger.Logger.Printf("write: %s", rsp)
 		response = reqData
-
-
-		//data := &protocol.Server2Client{
-		//	Key: protocol.Server2ClientKey_Success,
-		//}
-		//var err error
-		//response, err = proto.Marshal(data)
-		//if err != nil {
-		//	myLogger.Logger.PrintError("marshaling error: ", err)
-		//	return nil
-		//}
 		clientConn.belongGroup = groupName
 	}
 	return response
 }
 
-func (b *Broker)  registerConsumer(groupName string, clientID int64)   (response []byte) {
+func (b *Broker)  RegisterConsumer(groupName string, clientID int64)   (response []byte) {
 	//request := data.client2serverData
 	//groupName := request.GroupName
 	group, ok := b.getGroup(&groupName)
@@ -1111,25 +957,10 @@ func (b *Broker)  registerConsumer(groupName string, clientID int64)   (response
 	}
 	myLogger.Logger.Printf("write: %s", rsp)
 	response = reqData
-
-
-	//data := &protocol.Server2Client{
-	//	Key: protocol.Server2ClientKey_ChangeConsumerPartition,
-	//	Partitions: group.getClientPartition(clientConn.id),
-	//}
-	//
-	//var err error
-	//response, err = proto.Marshal(data)
-	//if err != nil {
-	//	myLogger.Logger.PrintError("marshaling error: ", err)
-	//	return nil
-	//}
 	return response
 }
 
-func (b *Broker)  unRegisterConsumer(groupName string, clientID int64)   (response []byte) {
-	//request := data.client2serverData
-	//groupName := request.GroupName
+func (b *Broker)  UnRegisterConsumer(groupName string, clientID int64)   (response []byte) {
 	group, ok := b.getGroup(&groupName)
 	myLogger.Logger.Printf("registerComsummer : %s", groupName)
 	if !ok {

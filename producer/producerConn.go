@@ -7,11 +7,12 @@ import (
 	"net"
 )
 
+const bufferSize = 4096
 type producerConn struct {
 	addr string
 	producer *Producer
 	reader *bufio.Reader
-	//writer *bufio.Writer
+	writer *bufio.Writer
 	conn net.Conn
 	//writeChan     chan *protocol.Client2Server
 	//exitChan chan string
@@ -24,8 +25,8 @@ func newConn(addr string, producer *Producer)  (*producerConn, error){
 	}
 	c := &producerConn{
 		addr: addr,
-		reader: bufio.NewReader(conn),
-		//writer: bufio.NewWriter(conn),
+		reader: bufio.NewReaderSize(conn, bufferSize),
+		writer: bufio.NewWriterSize(conn, bufferSize),
 		producer: producer,
 		conn: conn,
 	}
@@ -35,63 +36,47 @@ func newConn(addr string, producer *Producer)  (*producerConn, error){
 
 func (p *producerConn)readResponse() (*protocol.ClientServerCmd, []byte, error){
 	return protocalFuc.ReadAndUnPackClientServerProtoBuf(p.reader)
-
-
-	//myLogger.Logger.Print("reading")
-	//tmp := make([]byte, 4)
-	//_, err := io.ReadFull(p.reader, tmp) //读取长度
-	//if err != nil {
-	//	if err == io.EOF {
-	//		myLogger.Logger.Print("EOF")
-	//	} else {
-	//		myLogger.Logger.Print(err)
-	//	}
-	//	return nil, err
-	//}
-	//len := int32(binary.BigEndian.Uint32(tmp))
-	//myLogger.Logger.Printf("readLen %d ", len)
-	//requestData := make([]byte, len)
-	//_, err = io.ReadFull(p.reader, requestData) //读取内容
-	//if err != nil {
-	//	if err == io.EOF {
-	//		myLogger.Logger.Print("EOF")
-	//	} else {
-	//		myLogger.Logger.Print(err)
-	//	}
-	//	return nil, err
-	//}
-	//response := &protocol.Server2Client{}
-	//err = proto.Unmarshal(requestData, response)
-	//if err != nil {
-	//	myLogger.Logger.Print("Unmarshal error %s", err)
-	//	return nil, err
-	//}
-	//myLogger.Logger.Printf("receive response Key:%s : %s", response.Key, response)
-	//return response, nil
 }
 
-func (p *producerConn)Write(data []byte) (error){
+func (p *producerConn)Close() error{
+	err := p.writer.Flush()
+	if err != nil {
+		return err
+	}
+	return p.conn.Close()
+}
 
-	//var buf [4]byte
-	//bufs := buf[:]
-	//binary.BigEndian.PutUint32(bufs, uint32(len(data)))
-	//_, err := p.writer.Write(bufs)
-	//if err != nil {
-	//	//myLogger.Logger.PrintError("writer error: ", err)
-	//	return err
-	//}
-	_, err := p.conn.Write(data)
+func (p *producerConn)Write(data []byte) error{
+	_, err := p.writer.Write(data)
 	if err != nil {
 		//myLogger.Logger.PrintError("writer error: ", err)
 		return err
 	}
-	//err = p.writer.Flush()
-	//if err != nil {
-	//	//myLogger.Logger.PrintError("writer error: ", err)
-	//	return err
-	//}
+	err = p.writer.Flush()
+	if err != nil {
+		//myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
 	return nil
 }
+
+func (p *producerConn)WriteDefer(data []byte) (error){
+	_, err := p.writer.Write(data)
+	if err != nil {
+		//myLogger.Logger.PrintError("writer error: ", err)
+		return err
+	}
+	return nil
+}
+
+//func (p *producerConn)WriteFlush1() (error){
+//	err := p.writer.Flush()
+//	if err != nil {
+//		//myLogger.Logger.PrintError("writer error: ", err)
+//		return err
+//	}
+//	return nil
+//}
 //func (p *producerConn)Handle() {
 //	var wg sync.WaitGroup
 //	wg.Add(2)

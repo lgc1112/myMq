@@ -31,6 +31,10 @@ message Partition {
   string addr = 2;
 }
 
+message Partitions {
+  repeated Partition partition = 1;
+}
+
 message ListenAddr{
   string clientListenAddr = 1;
   string BrokerListenAddr = 2;

@@ -66,36 +66,36 @@ func ReadAndUnPackClientServerProtoBuf(r io.Reader) (*protocol.ClientServerCmd, 
 //
 //
 //}
-func UnPackClientServer(r io.Reader) ( interface{}, error) {
-	tmp := make([]byte, 4)
-	_, err := io.ReadFull(r, tmp) //读取长度
-	if err != nil {
-		if err == io.EOF {
-			myLogger.Logger.Print("EOF")
-		} else {
-			myLogger.Logger.Print(err)
-		}
-		return nil, err
-	}
-	len := int32(binary.BigEndian.Uint32(tmp))
-	myLogger.Logger.Printf("readLen %d ", len)
-	requestData := make([]byte, len)
-	_, err = io.ReadFull(r, requestData) //读取内容
-	if err != nil {
-		if err == io.EOF {
-			myLogger.Logger.Print("EOF")
-		} else {
-			myLogger.Logger.Print(err)
-		}
-		return nil, err
-	}
-	client2ServerData := &protocol.Client2Server{}
-	err = proto.Unmarshal(requestData, client2ServerData)
-	if err != nil {
-		return nil, err
-		myLogger.Logger.PrintError("Unmarshal error %s", err)
-	}else{
-		myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
-	}
-	return client2ServerData, nil
-}
+//func UnPackClientServer(r io.Reader) ( interface{}, error) {
+//	tmp := make([]byte, 4)
+//	_, err := io.ReadFull(r, tmp) //读取长度
+//	if err != nil {
+//		if err == io.EOF {
+//			myLogger.Logger.Print("EOF")
+//		} else {
+//			myLogger.Logger.Print(err)
+//		}
+//		return nil, err
+//	}
+//	len := int32(binary.BigEndian.Uint32(tmp))
+//	myLogger.Logger.Printf("readLen %d ", len)
+//	requestData := make([]byte, len)
+//	_, err = io.ReadFull(r, requestData) //读取内容
+//	if err != nil {
+//		if err == io.EOF {
+//			myLogger.Logger.Print("EOF")
+//		} else {
+//			myLogger.Logger.Print(err)
+//		}
+//		return nil, err
+//	}
+//	client2ServerData := &protocol.Client2Server{}
+//	err = proto.Unmarshal(requestData, client2ServerData)
+//	if err != nil {
+//		return nil, err
+//		myLogger.Logger.PrintError("Unmarshal error %s", err)
+//	}else{
+//		myLogger.Logger.Printf("receive client2ServerData: %s", client2ServerData)
+//	}
+//	return client2ServerData, nil
+//}

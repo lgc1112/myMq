@@ -53,7 +53,7 @@ func (c *controller2BrokerConn)clientHandle() {
 	wg.Wait()
 	c.clientExit()
 	myLogger.Logger.Print("a controller2BrokerConn leave")
-	c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
+	//c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
 }
 
 func (c *controller2BrokerConn)clientExit() {
@@ -89,7 +89,7 @@ func (c *controller2BrokerConn)Put(data *protocol.Controller2Broker) (error){
 	select {
 	case c.writeMsgChan <- data:
 		//myLogger.Logger.Print("do not have client")
-	case <-time.After(500 * time.Microsecond):
+	case <-time.After(5000 * time.Microsecond):
 		myLogger.Logger.PrintError("write controller2BrokerConn fail")
 		return errors.New("write controller2BrokerConn fail")
 	}
@@ -119,6 +119,9 @@ func (c *controller2BrokerConn) writeLoop() {
 		}
 	}
 exit:
+	if !c.broker.needExit{
+		c.broker.GetAndDeletePartitionForBroker(&c.clientListenAddr) //该broker挂了，删除对应分区
+	}
 	//myLogger.Logger.Print("close writeLoop")
 	return
 }
@@ -153,7 +156,7 @@ func (c *controller2BrokerConn)readLoop() {
 		case protocol.Broker2ControllerKey_RegisterBroker:
 			c.clientListenAddr = broker2ControllerData.Addr.ClientListenAddr
 			c.broker.AddBrokerConn(c) //注册
-			partitions := c.broker.getPartitionForBroker(&broker2ControllerData.Addr.ClientListenAddr)
+			partitions, dirtyTopics:= c.broker.GetAndAddPartitionForBroker(&broker2ControllerData.Addr.ClientListenAddr)
 			for _, partition := range partitions{
 				controller2BrokerData := &protocol.Controller2Broker{ //创建分区的消息
 					Key: protocol.Controller2BrokerKey_CreadtPartition,
@@ -167,8 +170,24 @@ func (c *controller2BrokerConn)readLoop() {
 					myLogger.Logger.PrintError("CreadtPartition error:", err, controller2BrokerData)
 				}
 			}
+			if openCluster{
+				for topicName, _ := range *dirtyTopics{ //上传到etcd节点
+					topic, _ := c.broker.getTopic(&topicName)
+					pars := &protocol.Partitions{ //创建分区的消息
+						Partition: topic.getPartitions(),
+					}
+					data, err := proto.Marshal(pars)
+					if err != nil {
+						myLogger.Logger.PrintError("marshaling error: ", err)
+						continue
+					}
+
+					myLogger.Logger.Print(topicName, " Put Patitions : ", pars)
+					c.broker.etcdClient.PutPatitions(topicName, string(data)) //将分区改变保存到集群
+				}
+			}
 			//c.broker.RebanlenceAllGroup()
-			c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
+			//c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
 
 		case protocol.Broker2ControllerKey_Heartbeat:
 
