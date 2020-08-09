@@ -14,9 +14,9 @@ import (
 )
 import "../../consumer"
 
-
 var sum int32
-const  testTime = 20000 * time.Second//测试时间
+
+const testTime = 20000 * time.Second //测试时间
 var consumerNum = 10
 var partitionNum = 10
 var reCreateTopic = true //是否需要重建topic
@@ -27,7 +27,7 @@ func main() {
 	brokerAddr := flag.String("addr", "0.0.0.0:12345", "ip:port")
 	cNum := flag.Int("consumerNum", consumerNum, "int")
 	pNum := flag.Int("partitionNum", partitionNum, "int")
-	rC := flag.Bool("reCreateTopic", false, "bool")
+	rC := flag.Bool("reCreateTopic", reCreateTopic, "bool")
 	flag.Parse() //解析参数
 
 	consumerNum = *cNum
@@ -38,30 +38,31 @@ func main() {
 
 	host, port, _ := net.SplitHostPort(*brokerAddr)
 	if host == "0.0.0.0" { //转换为本地ip
-		*brokerAddr = getIntranetIp() + ":" + port//真实ip
+		*brokerAddr = getIntranetIp() + ":" + port //真实ip
 	}
 
 	StressTest(brokerAddr)
 }
 
 type myHandle struct {
-	id int
+	id          int
 	receivedNum int64
 }
 
-func  NormalTest(addr *string)  {
+func NormalTest(addr *string) {
 	brokerAddrs := []string{*addr}
 	var wg sync.WaitGroup
-	for i := 0; i < consumerNum; i++{
-		consumer, err := consumer.NewConsumer(brokerAddrs,"group0")
+	for i := 0; i < consumerNum; i++ {
+		consumer, err := consumer.NewConsumer(brokerAddrs, "group0")
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		if i == 0 && reCreateTopic{
+		if i == 0 && reCreateTopic {
 			consumer.DeleteTopic("fff") //先删除原来的分区
-			time.Sleep(1000 * time.Millisecond)
+			//time.Sleep(1000 * time.Millisecond)
 			consumer.CreatTopic("fff", int32(partitionNum))
+			//time.Sleep(3000 * time.Millisecond)
 		}
 		err = consumer.SubscribeTopic("fff")
 		if err != nil {
@@ -79,7 +80,7 @@ func  NormalTest(addr *string)  {
 }
 
 //压力测试
-func  StressTest(addr *string) {
+func StressTest(addr *string) {
 	brokerAddrs := []string{*addr}
 	var wg sync.WaitGroup
 	exitChan := make(chan bool)
@@ -90,6 +91,13 @@ func  StressTest(addr *string) {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+		myHandle := myHandle{i, 0}
+		wg.Add(1)
+		go func() {
+			consumer.ReadLoop(myHandle, exitChan) //处理接收消息
+			wg.Done()
+		}()
+		myLogger.Logger.Print("NewConsumer:", i)
 		if i == 0 && reCreateTopic {
 			consumer.DeleteTopic("fff") //先删除原来的分区
 			consumer.CreatTopic("fff", int32(partitionNum))
@@ -99,42 +107,34 @@ func  StressTest(addr *string) {
 			myLogger.Logger.Print(err)
 			os.Exit(1)
 		}
-		myHandle := myHandle{i, 0}
-		wg.Add(1)
-		go func() {
-			consumer.ReadLoop(myHandle, exitChan) //处理接收消息
-			wg.Done()
-		}()
-		myLogger.Logger.Print("NewConsumer:", i)
 	}
 
 	exitSignal := make(chan os.Signal)
-	signal.Notify(exitSignal, os.Interrupt, os.Kill)//监听信号
-
+	signal.Notify(exitSignal, os.Interrupt, os.Kill) //监听信号
 
 	//starTime := time.Now()
 	timeTicker := time.NewTicker(time.Second) //每秒触发一次
 	//atomic.StoreInt32(&sum, 0)
-	myLogger.Logger.Printf("%d", sum )
+	myLogger.Logger.Printf("%d", sum)
 	lastSecendSum := sum
-	for{
+	for {
 		select {
-		case s := <- exitSignal: //退出信号来了
+		case s := <-exitSignal: //退出信号来了
 			myLogger.Logger.Print("exitSignal:", s)
 			close(exitChan) //关闭退出管道，通知所有协程退出
 			goto exit
-		case <- timeTicker.C:
+		case <-timeTicker.C:
 			curSum := atomic.LoadInt32(&sum)
-			myLogger.Logger.PrintfDebug("接收速率: %d / s, 当前接收总量 %d", curSum - lastSecendSum, curSum)
+			myLogger.Logger.PrintfDebug("接收速率: %d / s, 当前接收总量 %d", curSum-lastSecendSum, curSum)
 			lastSecendSum = curSum
 		}
 	}
 exit:
-	wg.Wait()//等待退出
+	wg.Wait() //等待退出
 
 	//endTime := time.Now()
 	//seconds := int64(endTime.Sub(starTime).Seconds())
-	myLogger.Logger.PrintfDebug("消费者数量: %d    接收总数: %d", consumerNum,  sum)
+	myLogger.Logger.PrintfDebug("消费者数量: %d    接收总数: %d", consumerNum, sum)
 	myLogger.Logger.Print("NewConsumer finished:")
 	wg.Wait()
 }
@@ -144,8 +144,7 @@ func (h myHandle) ProcessMsg(msg *protocol.Message) {
 	myLogger.Logger.Printf("Consumer %d receive data is %s:", h.id, string(msg.Msg))
 }
 
-
-func getIntranetIp() string{
+func getIntranetIp() string {
 	addrs, err := net.InterfaceAddrs()
 
 	if err != nil {

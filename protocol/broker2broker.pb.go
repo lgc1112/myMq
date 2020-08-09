@@ -67,6 +67,7 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 
+// broker与controller之间的数据
 type Controller2BrokerKey int32
 
 const (

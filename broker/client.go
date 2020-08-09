@@ -11,43 +11,46 @@ import (
 	"sync"
 	"time"
 )
+
 const defaultreadyNum = 1000
+
 type client struct {
-	id int64
-	conn net.Conn
+	id     int64
+	conn   net.Conn
 	reader *bufio.Reader
 	//writerLock sync.RWMutex
-	writer *bufio.Writer
-	broker *Broker
-	belongGroup string
-	consumePartions map[string] bool //该消费者消费的分区，key:分区名
-	writeCmdChan     chan []byte
-	writeMsgChan     chan []byte
-	exitChan chan string
-	readyNum int32 //客户端目前可接受的数据量
-	changeReadyNum chan int32 //使得readyNum只在writeLoop协程中修改
+	writer          *bufio.Writer
+	broker          *Broker
+	belongGroup     string
+	consumePartions map[string]bool //该消费者消费的分区，key:分区名
+	writeCmdChan    chan []byte
+	writeMsgChan    chan []byte
+	exitChan        chan string
+	readyNum        int32      //客户端目前可接受的数据量
+	changeReadyNum  chan int32 //使得readyNum只在writeLoop协程中修改
 	//isbrokerExitLock1 sync.RWMutex
 	isbrokerExit bool
 }
 
-func newClient(conn net.Conn, broker *Broker)  *client{
+//新建client实例
+func NewClient(conn net.Conn, broker *Broker) *client {
 	c := &client{
-		id : broker.GenerateClientId(),
-		conn: conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
-		broker: broker,
-		consumePartions: make(map[string] bool),
-		writeCmdChan: make(chan []byte),
-		writeMsgChan: make(chan []byte),
-		exitChan: make(chan string),
-		changeReadyNum: make(chan int32),
-		readyNum: defaultreadyNum, //客户端默认可接收数据为1000
+		id:              broker.GenerateClientId(),
+		conn:            conn,
+		reader:          bufio.NewReader(conn),
+		writer:          bufio.NewWriter(conn),
+		broker:          broker,
+		consumePartions: make(map[string]bool),
+		writeCmdChan:    make(chan []byte),
+		writeMsgChan:    make(chan []byte),
+		exitChan:        make(chan string),
+		changeReadyNum:  make(chan int32),
+		readyNum:        defaultreadyNum, //客户端默认可接收数据为1000
 	}
 	//broker.clientChangeChan <- &clientChange{true, c}
 	waitFinished := make(chan bool)
-	c.broker.clientChangeChan <- &clientChange{true, c, waitFinished}//放到broker 的readLoop协程中进行处理
-	<- waitFinished //等待添加
+	c.broker.clientChangeChan <- &clientChange{true, c, waitFinished} //放到broker 的readLoop协程中进行处理
+	<-waitFinished                                                    //等待添加
 	//broker.addClient(c)
 	return c
 }
@@ -56,7 +59,8 @@ func newClient(conn net.Conn, broker *Broker)  *client{
 //	c.conn.Close()
 //}
 
-func (c *client)clientHandle() {
+//client处理函数
+func (c *client) ClientHandle() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -73,39 +77,40 @@ func (c *client)clientHandle() {
 	myLogger.Logger.Print("a client leave2")
 }
 
-func (c *client)getWriteMsgChan() chan []byte {
+func (c *client) getWriteMsgChan() chan []byte {
 	return c.writeMsgChan
 }
 
-func (c *client)getWriteCmdChan() chan []byte {
+func (c *client) getWriteCmdChan() chan []byte {
 	return c.writeCmdChan
 }
-func (c *client)clientExit() {
-	if c.isbrokerExit{//如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
-		myLogger.Logger.Print("exit client isbrokerExit:", c.id)
-		waitFinished := make(chan bool)
-		c.broker.clientChangeChan <- &clientChange{false, c, waitFinished}//放到broker 的readLoop协程中进行处理，避免频繁使用锁
-		<- waitFinished //等待移除
 
-		close(c.writeMsgChan)
-		close(c.writeCmdChan)
-		close(c.changeReadyNum)
-		close(c.exitChan)
-		return
-	}
-
+//退出前回收数据
+func (c *client) clientExit() {
+	//if c.isbrokerExit { //如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
+	//	myLogger.Logger.Print("exit client isbrokerExit:", c.id)
+	//	waitFinished := make(chan bool)
+	//	c.broker.clientChangeChan <- &clientChange{false, c, waitFinished} //放到broker 的readLoop协程中进行处理，避免频繁使用锁
+	//	<-waitFinished                                                     //等待移除
+	//
+	//	close(c.writeMsgChan)
+	//	close(c.writeCmdChan)
+	//	close(c.changeReadyNum)
+	//	close(c.exitChan)
+	//	return
+	//}
 
 	myLogger.Logger.Print("exit client :", c.id)
 	waitFinished := make(chan bool)
-	c.broker.clientChangeChan <- &clientChange{false, c, waitFinished}//放到broker 的readLoop协程中进行处理，避免频繁使用锁
-	<- waitFinished //等待移除
+	c.broker.clientChangeChan <- &clientChange{false, c, waitFinished} //放到broker 的readLoop协程中进行处理，避免频繁使用锁
+	<-waitFinished                                                     //等待移除
 	//从group中删除
 	group, ok := c.broker.getGroup(&c.belongGroup)
 	if !ok {
 		myLogger.Logger.Printf("exit client %d do not belong to any group", c.id)
-	}else{
+	} else {
 		myLogger.Logger.Printf("exit client belong to group : %s", c.belongGroup)
-		succ:= group.deleteClient(c.id) //从group中删除
+		succ := group.deleteClient(c.id) //从group中删除
 		if succ {
 			if !c.isbrokerExit { //如果是broker退出了不用做负载均衡操作。
 				group.Rebalance()
@@ -115,11 +120,11 @@ func (c *client)clientExit() {
 
 	c.broker.partitionMapLock.RLock()
 	//从partition中删除
-	for partitionName, _ := range c.consumePartions{//delete from partition
+	for partitionName, _ := range c.consumePartions { //delete from partition
 		partition, ok := c.broker.getPartition(&partitionName)
 		if !ok {
 			myLogger.Logger.Print("exit partition do not exist ：", partition.name)
-		}else{
+		} else {
 			myLogger.Logger.Print("exit partition : ", partition.name)
 			partition.invalidComsummerClient(c, c.belongGroup)
 		}
@@ -135,37 +140,32 @@ func (c *client)clientExit() {
 	close(c.exitChan)
 }
 
-
+//负责写数据到客户端的协程
 func (c *client) writeLoop() {
 	var server2ClientData []byte
 	writeMsgChan := c.writeMsgChan
-	timeTicker := time.NewTicker(200 * time.Millisecond) //每200m秒触发一次
-	for{
+	timeTicker := time.NewTicker(200 * time.Millisecond) //每200m秒定时触发一次
+	for {
 		select {
-		case <- timeTicker.C://定时也flush
-			err := c.writer.Flush()
-			if err != nil{
-				myLogger.Logger.PrintError( err)
-			}
-		case s := <- c.exitChan:
+		case s := <-c.exitChan:
 			myLogger.Logger.Print(s)
 			goto exit
-		case num := <- c.changeReadyNum:
-			if num == -1{
+		case num := <-c.changeReadyNum:
+			if num == -1 {
 				c.readyNum++
 				myLogger.Logger.Print("add readyNum: ", c.readyNum)
-			}else{
+			} else {
 				c.readyNum = num
 				myLogger.Logger.Print("change readyNum: ", c.readyNum)
 			}
-			if c.readyNum <= 0{
+			if c.readyNum <= 0 {
 				//writeMsgChan =  nil//不可以往客户端写
-			}else{
-				writeMsgChan =  c.writeMsgChan//可以开始往客户端写
+			} else {
+				writeMsgChan = c.writeMsgChan //可以开始往客户端写
 			}
-		case server2ClientData = <- writeMsgChan://如果向客户端发送了一条消息，则客户端目前可接受的数据量readyCount应该减一
+		case server2ClientData = <-writeMsgChan: //推送消息
 			c.readyNum--
-			if c.readyNum <= 0{
+			if c.readyNum <= 0 {
 				myLogger.Logger.Print("client not ready")
 				//writeMsgChan = nil //不能再发消息了，除非client重现提交readycount
 			}
@@ -176,9 +176,13 @@ func (c *client) writeLoop() {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
 			}
-
-		case server2ClientData = <- c.writeCmdChan:
-			myLogger.Logger.Printf("writeResponse %s", server2ClientData)
+		case <-timeTicker.C: //定时也flush
+			err := c.writer.Flush()
+			if err != nil {
+				myLogger.Logger.PrintError(err)
+			}
+		case server2ClientData = <-c.writeCmdChan: //推送命令
+			//myLogger.Logger.Printf("writeResponse %s", server2ClientData)
 			_, err := c.writer.Write(server2ClientData)
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
@@ -193,16 +197,16 @@ func (c *client) writeLoop() {
 	}
 exit:
 	timeTicker.Stop()
-	c.writer.Flush()
-	err := c.writer.Flush()
-	if err != nil {
-		myLogger.Logger.PrintError("writer error: ", err)
-	}
-	//myLogger.Logger.Print("close writeLoop")
+	//err := c.writer.Flush()
+	//if err != nil {
+	//	myLogger.Logger.PrintError("writer error: ", err)
+	//}
 	return
 }
-func (c *client)readLoop() {
-	for{
+
+//读客户端发来的消息的
+func (c *client) readLoop() {
+	for {
 		myLogger.Logger.Print("readLoop")
 		cmd, msgBody, err := protocalFuc.ReadAndUnPackClientServerProtoBuf(c.reader)
 		if err != nil {
@@ -222,7 +226,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive creatTopicReq: %s", creatTopicReq)
 			}
 			response = c.broker.CreatTopic(creatTopicReq.TopicName, creatTopicReq.PartitionNum)
@@ -232,7 +236,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive DeleteTopicReq: %s", deleteTopicReq)
 			}
 			response = c.broker.DeleteTopic(deleteTopicReq.TopicName)
@@ -242,7 +246,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive GetPublisherPartitionReq: %s", req)
 			}
 			response = c.broker.GetPublisherPartition(req.TopicName)
@@ -252,7 +256,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive GetConsumerPartitionReq: %s", req)
 			}
 			response = c.broker.GetConsumerPartition(req.GroupName, c.id)
@@ -262,7 +266,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive SubscribePartitionReq: %s", req)
 			}
 			response = c.broker.SubscribePartition(req.PartitionName, req.GroupName, c.id, req.RebalanceId)
@@ -272,7 +276,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive SubscribeTopicReq: %s", req)
 			}
 			response = c.broker.SubscribeTopic(req.TopicName, req.GroupName, c.id)
@@ -282,7 +286,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive RegisterConsumerReq: %s", req)
 			}
 			response = c.broker.RegisterConsumer(req.GroupName, c.id)
@@ -292,7 +296,7 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive UnRegisterConsumerReq: %s", req)
 			}
 			response = c.broker.UnRegisterConsumer(req.GroupName, c.id)
@@ -302,17 +306,17 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive PublishReq: %s", publishReq)
 			}
 			response = c.publish(publishReq.PartitionName, publishReq.Msg)
-		case protocol.ClientServerCmd_CmdCommitReadyNumReq://readyCount提交
+		case protocol.ClientServerCmd_CmdCommitReadyNumReq: //readyCount提交
 			req := &protocol.CommitReadyNumReq{}
 			err = proto.Unmarshal(msgBody, req) //得到消息体
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive CommitReadyNumReq: %s", req)
 			}
 			c.changeReadyNum <- req.ReadyNum //修改readyCount
@@ -322,19 +326,18 @@ func (c *client)readLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive PublishWithoutAskReq: %s", publishReq)
 			}
 			c.publish(publishReq.PartitionName, publishReq.Msg)
 		case protocol.ClientServerCmd_CmdPushMsgRsp:
 			//c.changeReadyNum <- -1 //修改readyCount++,如果客户端发送了一个ask消息，则客户端目前可接受的数据量readyCount应该加1,用-1表示加1
-
 			rsp := &protocol.PushMsgRsp{}
 			err = proto.Unmarshal(msgBody, rsp) //得到消息体
 			if err != nil {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
-			}else{
+			} else {
 				myLogger.Logger.Printf("receive PushMsgRsp: %s", rsp)
 			}
 			response = c.consumeSuccess(rsp.PartitionName, rsp.GroupName, rsp.MsgId)
@@ -342,24 +345,27 @@ func (c *client)readLoop() {
 			myLogger.Logger.Print("cannot find key")
 			//c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
 		}
-		if response != nil{
-			c.writeCmdChan <- response
+		if response != nil {
+			c.writeCmdChan <- response //回写response
 		}
 
 	}
 }
 
-func (c *client)  consumeSuccess(partitionName string, groupName string, msgId int32)   (response []byte) {
-	c.broker.partitionMapLock.RLock()
-	defer c.broker.partitionMapLock.RUnlock()
-
-	partition, ok := c.broker.getPartition(&partitionName)
+//处理消费成功的commit
+func (c *client) consumeSuccess(partitionName string, groupName string, msgId int32) (response []byte) {
+	//c.broker.partitionMapLock.RLock()
+	//defer c.broker.partitionMapLock.RUnlock()
+	//
+	//partition, ok := c.broker.getPartition(&partitionName)
+	partition, ok := c.broker.getPartitionAndLock(&partitionName)
+	defer c.broker.getPartitionUnlock()
 	if !ok {
 		myLogger.Logger.Printf("consume Partition Not existed : %s", partitionName)
 		return nil
-	}else {
+	} else {
 		msgAskData := &msgAskData{
-			msgId: msgId,
+			msgId:     msgId,
 			groupName: groupName,
 		}
 		partition.msgAskChan <- msgAskData
@@ -367,10 +373,13 @@ func (c *client)  consumeSuccess(partitionName string, groupName string, msgId i
 	}
 }
 
-func (c *client)  publish(partitionName string, msg *protocol.Message)  (response []byte) {
-	c.broker.partitionMapLock.RLock()
-	defer c.broker.partitionMapLock.RUnlock()
-	partition, ok := c.broker.getPartition(&partitionName)
+//处理client发布的消息
+func (c *client) publish(partitionName string, msg *protocol.Message) (response []byte) {
+	//c.broker.partitionMapLock.RLock()
+	//defer c.broker.partitionMapLock.RUnlock()
+	//partition, ok := c.broker.getPartition(&partitionName)
+	partition, ok := c.broker.getPartitionAndLock(&partitionName)
+	defer c.broker.getPartitionUnlock()
 	if !ok {
 		myLogger.Logger.Printf("Partition Not existed : %s", partitionName)
 
@@ -391,9 +400,9 @@ func (c *client)  publish(partitionName string, msg *protocol.Message)  (respons
 		response = reqData
 
 		return response
-	}else{
+	} else {
 		myLogger.Logger.Printf("publish msg : %s", msg.String())
-		response = partition.Put(msg)
+		response = partition.Put(msg) //投递到partition
 
 		return response
 	}

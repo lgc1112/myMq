@@ -8,19 +8,23 @@ import (
 )
 
 type brokerTcpServer struct {
-	broker *Broker
-	addr string
-	listener net.Listener//closee这个就可以关闭startTcpServer协程
+	broker   *Broker
+	addr     string
+	listener net.Listener //closee这个就可以关闭startTcpServer协程
 }
 
-
-func NewBrokerTcpServer(broker *Broker, addr string) *brokerTcpServer{
-	return &brokerTcpServer{broker:broker, addr:addr}
+//tcp服务器
+func NewBrokerTcpServer(broker *Broker, addr string) *brokerTcpServer {
+	return &brokerTcpServer{broker: broker, addr: addr}
 }
-func (b *brokerTcpServer)Close() {
+
+//close
+func (b *brokerTcpServer) Close() {
 	b.listener.Close()
 }
-func (b *brokerTcpServer)startTcpServer() {
+
+//监听broker的连接（自身是controller的情况下才会开启）
+func (b *brokerTcpServer) startTcpServer() {
 	var err error
 	b.listener, err = net.Listen("tcp", b.addr)
 	myLogger.Logger.Print("brokerTcpServer  " + b.addr)
@@ -44,7 +48,7 @@ func (b *brokerTcpServer)startTcpServer() {
 		}()
 	}
 	myLogger.Logger.Print("brokerTcpServer: close 1")
-	wg.Wait()//等待client协程关闭
+	wg.Wait() //等待client协程关闭
 	myLogger.Logger.Print("brokerTcpServer: close 2")
 
 }

@@ -106,6 +106,7 @@ func (x ClientServerCmd) String() string {
 }
 func (ClientServerCmd) EnumDescriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
 
+// broker与 Client之间的数据
 type ClientServerHeader struct {
 	Cmd    ClientServerCmd `protobuf:"varint,1,opt,name=cmd,enum=protocol.ClientServerCmd" json:"cmd,omitempty"`
 	MsgLen int32           `protobuf:"varint,2,opt,name=msgLen" json:"msgLen,omitempty"`

@@ -1,4 +1,5 @@
 package protocalFuc
+
 import (
 	"../../mylib/myLogger"
 	"../../protocol"
@@ -6,9 +7,11 @@ import (
 	"github.com/golang/protobuf/proto"
 	"io"
 )
-func PackClientServerProtoBuf(cmd protocol.ClientServerCmd, body []byte) ( []byte, error) {
+
+//根据协议打包数据为[]byte
+func PackClientServerProtoBuf(cmd protocol.ClientServerCmd, body []byte) ([]byte, error) {
 	h := &protocol.ClientServerHeader{ //消息头创建
-		Cmd: cmd,
+		Cmd:    cmd,
 		MsgLen: int32(len(body)),
 	}
 	//client2ServerData := &protocol.Message{}
@@ -19,14 +22,14 @@ func PackClientServerProtoBuf(cmd protocol.ClientServerCmd, body []byte) ( []byt
 		return nil, err
 	}
 	res := make([]byte, 4)
-	binary.BigEndian.PutUint32(res, uint32(len(hBytes)))//放入消息头长度
+	binary.BigEndian.PutUint32(res, uint32(len(hBytes))) //放入消息头长度
 
 	res = append(res, hBytes...) //放入消息头
-	res = append(res, body...) //放入消息体
+	res = append(res, body...)   //放入消息体
 	return res, nil
 }
 
-
+//读取并解析协议
 func ReadAndUnPackClientServerProtoBuf(r io.Reader) (*protocol.ClientServerCmd, []byte, error) {
 	tmp := make([]byte, 4)
 	_, err := io.ReadFull(r, tmp) //读取包头长度
@@ -35,7 +38,7 @@ func ReadAndUnPackClientServerProtoBuf(r io.Reader) (*protocol.ClientServerCmd, 
 		return nil, nil, err
 	}
 	len := int32(binary.BigEndian.Uint32(tmp))
-	myLogger.Logger.Printf("HeaderLen %d ", len)
+	//myLogger.Logger.Printf("HeaderLen %d ", len)
 	tmp = make([]byte, len)
 	_, err = io.ReadFull(r, tmp) //读取包头
 	if err != nil {
@@ -48,19 +51,18 @@ func ReadAndUnPackClientServerProtoBuf(r io.Reader) (*protocol.ClientServerCmd, 
 	if err != nil {
 		//myLogger.Logger.PrintError("Unmarshal error %s", err)
 		return nil, nil, err
-	}else{
+	} else {
 		myLogger.Logger.Printf("receive ClientServerHeader: %s", clientServerHeader)
 	}
 
 	body := make([]byte, clientServerHeader.MsgLen) //消息体
-	_, err = io.ReadFull(r, body) //读取消息体
+	_, err = io.ReadFull(r, body)                   //读取消息体
 	if err != nil {
 		//myLogger.Logger.Print(err)
 		return nil, nil, err
 	}
 	return &clientServerHeader.Cmd, body, nil
 }
-
 
 //func convert2(data []byte) (error) {
 //

@@ -1,22 +1,24 @@
 package broker
-import(
+
+import (
 	"../protocol"
 )
+
 //type priorityQueue struct {
 //	priorityQueue []*protocol.Message
 //}
 
-
 type priorityQueue []*protocol.InternalMessage
+
 //var p priorityQueue
 //var prio heap.Interface = &p
 
-func NewPriorityQueue(capacity int) *priorityQueue{
+func NewPriorityQueue(capacity int) *priorityQueue {
 	priorityQueue := make(priorityQueue, 0, capacity)
 	return &priorityQueue
 }
 
-func (pq priorityQueue) Len() int{
+func (pq priorityQueue) Len() int {
 	return len(pq)
 }
 
@@ -37,12 +39,10 @@ func (pq *priorityQueue) Push(x interface{}) {
 	*pq = append(*pq, mes)
 }
 
-func (pq *priorityQueue) Pop() interface{}{
+func (pq *priorityQueue) Pop() interface{} {
 	old := *pq
 	n := len(old)
 	mes := old[n-1]
 	*pq = old[0 : n-1]
 	return mes
 }
-
-

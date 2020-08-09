@@ -12,34 +12,36 @@ import (
 	"sync"
 	"time"
 )
+
 type controller2BrokerConn struct {
-	id int64
-	conn net.Conn
+	id     int64
+	conn   net.Conn
 	reader *bufio.Reader
 	writer *bufio.Writer
 
-	broker *Broker
-	clientListenAddr string//客户端的监听地址
+	broker           *Broker
+	clientListenAddr string //客户端的监听地址
 
-	writeMsgChan     chan *protocol.Controller2Broker
-	exitChan chan string
+	writeMsgChan chan *protocol.Controller2Broker
+	exitChan     chan string
 }
 
-func NewController2BrokerConn(conn net.Conn, broker *Broker)  *controller2BrokerConn{
+//controller到broker的连接
+func NewController2BrokerConn(conn net.Conn, broker *Broker) *controller2BrokerConn {
 	c := &controller2BrokerConn{
-		id : broker.GenerateClientId(),
-		conn: conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
-		broker: broker,
+		id:           broker.GenerateClientId(),
+		conn:         conn,
+		reader:       bufio.NewReader(conn),
+		writer:       bufio.NewWriter(conn),
+		broker:       broker,
 		writeMsgChan: make(chan *protocol.Controller2Broker),
-		exitChan: make(chan string),
+		exitChan:     make(chan string),
 	}
 	return c
 }
 
-
-func (c *controller2BrokerConn)clientHandle() {
+//连接处理函数
+func (c *controller2BrokerConn) clientHandle() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -56,14 +58,14 @@ func (c *controller2BrokerConn)clientHandle() {
 	//c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
 }
 
-func (c *controller2BrokerConn)clientExit() {
+//连接退出
+func (c *controller2BrokerConn) clientExit() {
 	c.broker.DeleteBrokerConn(c) //删除
 	close(c.writeMsgChan)
 	close(c.exitChan)
 }
 
-func (c *controller2BrokerConn)Write(data []byte) (error){
-
+func (c *controller2BrokerConn) Write(data []byte) error {
 	var buf [4]byte
 	bufs := buf[:]
 	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
@@ -85,7 +87,8 @@ func (c *controller2BrokerConn)Write(data []byte) (error){
 	return nil
 }
 
-func (c *controller2BrokerConn)Put(data *protocol.Controller2Broker) (error){
+//写数据
+func (c *controller2BrokerConn) Put(data *protocol.Controller2Broker) error {
 	select {
 	case c.writeMsgChan <- data:
 		//myLogger.Logger.Print("do not have client")
@@ -97,13 +100,14 @@ func (c *controller2BrokerConn)Put(data *protocol.Controller2Broker) (error){
 	return nil
 }
 
+//写数据到broker
 func (c *controller2BrokerConn) writeLoop() {
-	for{
+	for {
 		select {
-		case s := <- c.exitChan:
+		case s := <-c.exitChan:
 			myLogger.Logger.Print(s)
 			goto exit
-		case controller2BrokerData := <- c.writeMsgChan:
+		case controller2BrokerData := <-c.writeMsgChan:
 			myLogger.Logger.Printf("broker2ControllerConn write %s", controller2BrokerData)
 			data, err := proto.Marshal(controller2BrokerData)
 			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
@@ -119,14 +123,16 @@ func (c *controller2BrokerConn) writeLoop() {
 		}
 	}
 exit:
-	if !c.broker.needExit{
+	if !c.broker.needExit {
 		c.broker.GetAndDeletePartitionForBroker(&c.clientListenAddr) //该broker挂了，删除对应分区
 	}
 	//myLogger.Logger.Print("close writeLoop")
 	return
 }
-func (c *controller2BrokerConn)readLoop() {
-	for{
+
+//读取broker发来的数据
+func (c *controller2BrokerConn) readLoop() {
+	for {
 		myLogger.Logger.Print("readLoop")
 		tmp := make([]byte, 4)
 		_, err := io.ReadFull(c.reader, tmp) //读取长度
@@ -148,7 +154,7 @@ func (c *controller2BrokerConn)readLoop() {
 		err = proto.Unmarshal(data, broker2ControllerData)
 		if err != nil {
 			myLogger.Logger.PrintError("Unmarshal error %s", err)
-		}else{
+		} else {
 			myLogger.Logger.Print("receive broker2ControllerData:", broker2ControllerData)
 		}
 
@@ -156,8 +162,8 @@ func (c *controller2BrokerConn)readLoop() {
 		case protocol.Broker2ControllerKey_RegisterBroker:
 			c.clientListenAddr = broker2ControllerData.Addr.ClientListenAddr
 			c.broker.AddBrokerConn(c) //注册
-			partitions, dirtyTopics:= c.broker.GetAndAddPartitionForBroker(&broker2ControllerData.Addr.ClientListenAddr)
-			for _, partition := range partitions{
+			partitions, dirtyTopics := c.broker.GetAndAddPartitionForBroker(&broker2ControllerData.Addr.ClientListenAddr)
+			for _, partition := range partitions {
 				controller2BrokerData := &protocol.Controller2Broker{ //创建分区的消息
 					Key: protocol.Controller2BrokerKey_CreadtPartition,
 					Partitions: &protocol.Partition{
@@ -170,8 +176,8 @@ func (c *controller2BrokerConn)readLoop() {
 					myLogger.Logger.PrintError("CreadtPartition error:", err, controller2BrokerData)
 				}
 			}
-			if openCluster{
-				for topicName, _ := range *dirtyTopics{ //上传到etcd节点
+			if openCluster {
+				for topicName, _ := range *dirtyTopics { //上传到etcd节点
 					topic, _ := c.broker.getTopic(&topicName)
 					pars := &protocol.Partitions{ //创建分区的消息
 						Partition: topic.getPartitions(),
@@ -186,11 +192,8 @@ func (c *controller2BrokerConn)readLoop() {
 					c.broker.etcdClient.PutPatitions(topicName, string(data)) //将分区改变保存到集群
 				}
 			}
-			//c.broker.RebanlenceAllGroup()
-			//c.broker.etcdClient.PutControllerAddr(c.broker.maddr)
-
 		case protocol.Broker2ControllerKey_Heartbeat:
-
+			myLogger.Logger.Print("Broker2ControllerKey_Heartbeat")
 		case protocol.Broker2ControllerKey_CreadtPartitionSuccess:
 			myLogger.Logger.Print("CreadtPartitionSuccess")
 		default:

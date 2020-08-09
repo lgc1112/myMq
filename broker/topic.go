@@ -9,34 +9,34 @@ import (
 )
 
 type topic struct {
-	broker *Broker
-	name string
+	broker           *Broker
+	name             string
 	partitionMapLock sync.RWMutex
-	partitionMap map[string]*partition
-	maxPartitionNum int64
+	partitionMap     map[string]*partition
+	maxPartitionNum  int64
 }
 
 //新建topic
 func newTopic(name string, broker *Broker) *topic {
 	t := &topic{
-		broker : broker,
-		name : name,
-		partitionMap : make(map[string]*partition),
+		broker:       broker,
+		name:         name,
+		partitionMap: make(map[string]*partition),
 	}
 	return t
 }
 
 //删除topic的所有分区
-func (t *topic) deleteAllPartitions(){
+func (t *topic) deleteAllPartitions() {
 	//addr := broker.maddr.ClientListenAddr
 	t.partitionMapLock.Lock()
 	defer t.partitionMapLock.Unlock()
-	for _, partition := range t.partitionMap{
-		if !partition.isNativePartition{ //不是本地分区，通知broker关闭
+	for _, partition := range t.partitionMap {
+		if !partition.isNativePartition { //不是本地分区，通知broker关闭
 			brokerConn, ok := t.broker.GetBrokerConn(&partition.addr)
 			if !ok {
 				myLogger.Logger.PrintWarning("delete partition is not alive")
-			}else{
+			} else {
 				controller2BrokerData := &protocol.Controller2Broker{ //创建分区的消息
 					Key: protocol.Controller2BrokerKey_DeletePartition,
 					Partitions: &protocol.Partition{
@@ -45,12 +45,12 @@ func (t *topic) deleteAllPartitions(){
 					},
 				}
 				err := brokerConn.Put(controller2BrokerData) //发送
-				if err != nil{
+				if err != nil {
 					myLogger.Logger.PrintWarning("delete partition cannot contact")
 				}
 			}
 		}
-		t.broker.deletePartition(&partition.name) //先删除，再退出
+		t.broker.deletePartitionAutoLock(&partition.name) //先删除，再退出
 		partition.exit()
 	}
 
@@ -58,17 +58,17 @@ func (t *topic) deleteAllPartitions(){
 }
 
 //在该topic上新建分区
-func (t *topic) CreatePartitions(partitionNum int, addrs []string){
+func (t *topic) CreatePartitions(partitionNum int, addrs []string) {
 	//addr := broker.maddr.ClientListenAddr
 	k := 0
 	addrNum := len(addrs)
-	for i := 0; i < partitionNum; i++{
+	for i := 0; i < partitionNum; i++ {
 		partitionName := t.name + "-" + strconv.Itoa(i)
-		addr := addrs[k % addrNum]
+		addr := addrs[k%addrNum]
 		k++
 		isNativePartition := addr == t.broker.maddr.ClientListenAddr
-
-		if !isNativePartition{
+		//pars := make(map[string] []*protocol.Partition)
+		if !isNativePartition {
 			brokerConn, ok := t.broker.GetBrokerConn(&addr)
 			if !ok {
 				myLogger.Logger.PrintError("brokerConn not exist error")
@@ -82,7 +82,7 @@ func (t *topic) CreatePartitions(partitionNum int, addrs []string){
 				},
 			}
 			err := brokerConn.Put(controller2BrokerData) //发送
-			if err != nil{ //该broker无法分配分区，换下一个
+			if err != nil {                              //该broker无法分配分区，换下一个
 				i--
 				continue
 			}
@@ -120,18 +120,18 @@ func (t *topic) deletePartition(partitionName *string) {
 }
 
 //添加分区
-func (t *topic) AddPartition(partition *partition){
+func (t *topic) AddPartition(partition *partition) {
 	t.partitionMapLock.Lock()
 	t.partitionMap[partition.name] = partition
 	t.partitionMapLock.Unlock()
 	return
 }
 
-//获取topic的所有分区
-func (t *topic)getPartitions() []*protocol.Partition {
+//获取分区
+func (t *topic) getPartitions() []*protocol.Partition {
 	var partitions []*protocol.Partition
 	t.partitionMapLock.RLock()
-	for _, par := range t.partitionMap{
+	for _, par := range t.partitionMap {
 		tmp := &protocol.Partition{
 			Name: par.name,
 			Addr: par.addr,

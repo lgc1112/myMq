@@ -1,6 +1,7 @@
 syntax = "proto3";
 import "message.proto";
 package protocol;
+//broker与controller之间的数据
 enum Controller2BrokerKey
 {
   CreadtPartition = 0;

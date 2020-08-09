@@ -9,26 +9,29 @@ import (
 	"github.com/golang/protobuf/proto"
 	"sync"
 )
+
 const logDir string = "./consumerlog/"
-const openCluster bool = true //是否开启集群模式
-const defaultEtcdAddr string ="9.135.8.253:2379" //etcd服务器地址
+const openCluster bool = true                     //是否开启集群模式
+const defaultEtcdAddr string = "9.135.8.253:2379" //etcd服务器地址
 type Consumer struct {
-	addrs   []string
+	addrs     []string
 	groupName string
-	controllerConn *consumerConn
-	partitions []*protocol.Partition
+	//controllerConnLock sync.RWMutex
+	controllerConn    *consumerConn
+	partitions        []*protocol.Partition
 	brokerConnMapLock sync.RWMutex
-	brokerConnMap map[string] *consumerConn  //broker ip映射到consumerConn
-	sendIdx int
-	readChan     chan *readData
-	exitChan chan string
-	etcdClient *etcdClient.ClientEtcdClient
-	topic string
+	brokerConnMap     map[string]*consumerConn //broker ip映射到consumerConn
+	sendIdx           int
+	readChan          chan *readData
+	exitChan          chan string
+	topicResponseChan chan bool
+	etcdClient        *etcdClient.ClientEtcdClient
+	topic             string
 }
 type readData struct {
 	connAddr string
-	cmd *protocol.ClientServerCmd
-	msgBody []byte
+	cmd      *protocol.ClientServerCmd
+	msgBody  []byte
 	//server2ClientData *protocol.Server2Client
 }
 type Handler interface {
@@ -39,32 +42,33 @@ type Handler interface {
 func NewConsumer(addr []string, groupName string) (*Consumer, error) {
 	_, err := myLogger.New(logDir)
 	c := &Consumer{
-		addrs: addr,
-		groupName: groupName,
-		readChan: make(chan *readData),
-		exitChan: make(chan string),
-		brokerConnMap: make(map[string] *consumerConn),
+		addrs:             addr,
+		groupName:         groupName,
+		readChan:          make(chan *readData),
+		exitChan:          make(chan string),
+		topicResponseChan: make(chan bool),
+		brokerConnMap:     make(map[string]*consumerConn),
 	}
-	if openCluster{
+	if openCluster {
 		etcdAddr := defaultEtcdAddr
-		c.etcdClient, err = etcdClient.NewClientEtcdClient(c,  &etcdAddr)
-		if err != nil{
+		c.etcdClient, err = etcdClient.NewClientEtcdClient(c, &etcdAddr)
+		if err != nil {
 			myLogger.Logger.PrintError(err)
 			return nil, err
 		}
 		err = c.connect2Controller() //连接到controller
-		if err != nil{
+		if err != nil {
 			myLogger.Logger.PrintError(err)
 			return nil, err
 		}
-	}else{
+	} else {
 		err = c.Connect2Brokers()
 	}
 	return c, err
 }
 
 //连接到controller
-func (c *Consumer) connect2Controller() error{
+func (c *Consumer) connect2Controller() error {
 	masterAddr, err := c.etcdClient.GetControllerAddr() //获取controller地址
 	if err != nil {
 		myLogger.Logger.PrintError(err)
@@ -94,9 +98,13 @@ func (c *Consumer) ControllerAddrChange(addr *protocol.ListenAddr) {
 
 //集群中某topic发生变化时的回调函数
 func (c *Consumer) TopicChange(topic string, partition *protocol.Partitions) {
+	if c.controllerConn == nil {
+		myLogger.Logger.Print("TopicChange when c.controllerConn == nil")
+		return
+	}
 	myLogger.Logger.Print("TopicChange: ", topic, partition)
-	if topic == c.topic{
-		if _, ok := c.getBrokerConnAndLock(&c.controllerConn.addr); ok{ //查询连接是否失效
+	if topic == c.topic {
+		if _, ok := c.getBrokerConnAndLock(&c.controllerConn.addr); ok { //查询连接是否失效
 			c.SubscribeTopic(c.topic)
 		}
 		c.getBrokerConnUnLock()
@@ -114,7 +122,7 @@ func (c *Consumer) addBrokerConn(conn *consumerConn) {
 
 //获取broker的连接
 func (c *Consumer) getBrokerConn(addr *string) (*consumerConn, bool) {
-	myLogger.Logger.Print("getBrokerConn ", addr)
+	myLogger.Logger.Print("getBrokerConn ", *addr)
 	c.brokerConnMapLock.RLock()
 	broker, ok := c.brokerConnMap[*addr]
 	c.brokerConnMapLock.RUnlock()
@@ -124,7 +132,7 @@ func (c *Consumer) getBrokerConn(addr *string) (*consumerConn, bool) {
 
 //获取broker的连接并锁住
 func (c *Consumer) getBrokerConnAndLock(addr *string) (*consumerConn, bool) {
-	myLogger.Logger.Print("getBrokerConn ", addr)
+	myLogger.Logger.Print("getBrokerConn ", *addr)
 	c.brokerConnMapLock.RLock()
 	broker, ok := c.brokerConnMap[*addr]
 	myLogger.Logger.Print("getBrokerConn end")
@@ -162,7 +170,7 @@ func (c *Consumer) Connect2Brokers() error {
 
 //连接到指定broker
 func (c *Consumer) Connect2Broker(addr string) error {
-	if _, ok := c.getBrokerConn(&addr); ok{
+	if _, ok := c.getBrokerConn(&addr); ok {
 		myLogger.Logger.Printf("connecting to existing broker - %s", addr)
 		return nil
 	}
@@ -179,8 +187,8 @@ func (c *Consumer) Connect2Broker(addr string) error {
 }
 
 //删除topic
-func (c *Consumer) DeleteTopic(topic string){
-	if c.controllerConn == nil{
+func (c *Consumer) DeleteTopic(topic string) {
+	if c.controllerConn == nil {
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return
 	}
@@ -197,22 +205,28 @@ func (c *Consumer) DeleteTopic(topic string){
 		myLogger.Logger.PrintError("marshaling error", err)
 		return
 	}
-	err = c.controllerConn.Put(reqData)
+	if _, ok := c.getBrokerConnAndLock(&c.controllerConn.addr); ok { //查询连接是否失效
+		err = c.controllerConn.Put(reqData)
+	}
+	c.getBrokerConnUnLock()
+
 	if err != nil {
 		myLogger.Logger.PrintError("controllerConn Write err", err)
 		return
 	}
 	myLogger.Logger.Printf("DeleteTopic %s ", topic)
+	succ := <-c.topicResponseChan
+	myLogger.Logger.Print("DeleteTopic  ", succ)
 }
 
 //创建topic
-func (c *Consumer) CreatTopic(topic string, num int32){
-	if c.controllerConn == nil{
+func (c *Consumer) CreatTopic(topic string, num int32) {
+	if c.controllerConn == nil {
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return
 	}
 	requestData := &protocol.CreatTopicReq{
-		TopicName: topic,
+		TopicName:    topic,
 		PartitionNum: num,
 	}
 	data, err := proto.Marshal(requestData)
@@ -225,14 +239,18 @@ func (c *Consumer) CreatTopic(topic string, num int32){
 		myLogger.Logger.PrintError("marshaling error", err)
 		return
 	}
-	err = c.controllerConn.Put(reqData)
+	if _, ok := c.getBrokerConnAndLock(&c.controllerConn.addr); ok { //查询连接是否失效
+		err = c.controllerConn.Put(reqData)
+	}
+	c.getBrokerConnUnLock()
 	//err = c.controllerConn.Write(reqData)
 	if err != nil {
 		myLogger.Logger.PrintError("controllerConn Write err", err)
 		return
 	}
 	myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
-
+	succ := <-c.topicResponseChan
+	myLogger.Logger.Print("CreatTopic ", succ)
 }
 
 //订阅topic
@@ -253,7 +271,11 @@ func (c *Consumer) SubscribeTopic(topicName string) error {
 		return err
 	}
 	myLogger.Logger.Printf("write: %s", requestData)
-	c.controllerConn.Put(reqData)
+
+	if _, ok := c.getBrokerConnAndLock(&c.controllerConn.addr); ok { //查询连接是否失效
+		err = c.controllerConn.Put(reqData)
+	}
+	c.getBrokerConnUnLock()
 	if err != nil {
 		myLogger.Logger.PrintError("controllerConn Write err", err)
 		return err
@@ -266,7 +288,7 @@ func (c *Consumer) SubscribeTopic(topicName string) error {
 func (c *Consumer) CommitReadyNum(num int32) error {
 	c.brokerConnMapLock.RLock()
 	defer c.brokerConnMapLock.RUnlock()
-	if len(c.brokerConnMap) == 0{
+	if len(c.brokerConnMap) == 0 {
 		return errors.New("do not have any brokerConn")
 	}
 
@@ -283,7 +305,7 @@ func (c *Consumer) CommitReadyNum(num int32) error {
 		myLogger.Logger.PrintError("marshaling error", err)
 		return err
 	}
-	for _, brokerConn := range c.brokerConnMap{
+	for _, brokerConn := range c.brokerConnMap {
 		myLogger.Logger.Printf("write: %s", requestData)
 		err = brokerConn.Put(reqData)
 		if err != nil {
@@ -296,15 +318,15 @@ func (c *Consumer) CommitReadyNum(num int32) error {
 }
 
 //处理broker发来的消息
-func (c *Consumer) ReadLoop(handler Handler, exitChan <- chan bool) {
-	for{
+func (c *Consumer) ReadLoop(handler Handler, exitChan <-chan bool) {
+	for {
 		select {
-		case   _, ok := <- exitChan:
-			if !ok{
+		case _, ok := <-exitChan:
+			if !ok {
 				myLogger.Logger.Print("readLoop exit")
 				return
 			}
-		case data := <- c.readChan:
+		case data := <-c.readChan:
 			myLogger.Logger.Print("readLoop")
 
 			cmd := data.cmd
@@ -316,32 +338,47 @@ func (c *Consumer) ReadLoop(handler Handler, exitChan <- chan bool) {
 				if err != nil {
 					myLogger.Logger.PrintError("Unmarshal error %s", err)
 					break
-				}else{
+				} else {
 					myLogger.Logger.Printf("receive PushMsgReq: %s", req)
 				}
-				if handler == nil{//为空则使用默认处理
+				if handler == nil { //为空则使用默认处理
 					c.processMsg(req.Msg)
-				}else{//否则使用传入参数处理
+				} else { //否则使用传入参数处理
 					handler.ProcessMsg(req.Msg)
 				}
 				rsp := &protocol.PushMsgRsp{
-					Ret: protocol.RetStatus_Successs,
+					Ret:           protocol.RetStatus_Successs,
 					PartitionName: req.PartitionName,
-					GroupName: req.GroupName,
-					MsgId: req.Msg.Id,
+					GroupName:     req.GroupName,
+					MsgId:         req.Msg.Id,
 				}
-				data, err := proto.Marshal(rsp)
-				if err != nil {
-					myLogger.Logger.PrintError("marshaling error", err)
-					break
+				//data, err := proto.Marshal(rsp)
+				//if err != nil {
+				//	myLogger.Logger.PrintError("marshaling error", err)
+				//	break
+				//}
+				//reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
+				//if err != nil {
+				//	myLogger.Logger.PrintError("marshaling error", err)
+				//	break
+				//}
+				//myLogger.Logger.Printf("write: %s", rsp)
+				//response = reqData
+				conn, ok := c.getBrokerConnAndLock(&data.connAddr)
+				if ok {
+					myLogger.Logger.Print("write response", rsp)
+					conn.writeMsgChan <- rsp
+					//err := conn.PutMsg(rsp)
+					//if err != nil {
+					//	myLogger.Logger.PrintError("PutMsg error %s", err)
+					//	c.getBrokerConnUnLock()
+					//	continue
+					//}
+					myLogger.Logger.Print("write response end")
+				} else {
+					myLogger.Logger.Print("conn cannot find", data.connAddr)
 				}
-				reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
-				if err != nil {
-					myLogger.Logger.PrintError("marshaling error", err)
-					break
-				}
-				myLogger.Logger.Printf("write: %s", rsp)
-				response = reqData
+				c.getBrokerConnUnLock()
 
 			case protocol.ClientServerCmd_CmdChangeConsumerPartitionReq:
 
@@ -350,7 +387,7 @@ func (c *Consumer) ReadLoop(handler Handler, exitChan <- chan bool) {
 				if err != nil {
 					myLogger.Logger.PrintError("Unmarshal error %s", err)
 					break
-				}else{
+				} else {
 					myLogger.Logger.Printf("receive ChangeConsumerPartitionReq: %s", req)
 				}
 				response = c.changeConsumerPartition(req.Partitions, req.RebalanceId)
@@ -361,19 +398,52 @@ func (c *Consumer) ReadLoop(handler Handler, exitChan <- chan bool) {
 				if err != nil {
 					myLogger.Logger.PrintError("Unmarshal error %s", err)
 					break
-				}else{
-					myLogger.Logger.Printf("receive ChangeConsumerPartitio: %s", req)
+				} else {
+					myLogger.Logger.Printf("receive ChangeConsumerPartition: %s", req)
 				}
+			case protocol.ClientServerCmd_CmdCreatTopicRsp:
+				req := &protocol.CreatTopicRsp{}
+				err := proto.Unmarshal(data.msgBody, req) //得到消息体
+				myLogger.Logger.Print("CreatTopic response", req)
+				if err != nil {
+					myLogger.Logger.PrintError("Unmarshal error %s", err)
+					return
+				}
+				if req.Ret == protocol.RetStatus_Successs { //成功创建
+					c.topicResponseChan <- true
+				} else {
+					c.topicResponseChan <- false
+				}
+
+			case protocol.ClientServerCmd_CmdDeleteTopicRsp:
+				req := &protocol.DeleteTopicRsp{}
+				err := proto.Unmarshal(data.msgBody, req) //得到消息体
+				if err != nil {
+					myLogger.Logger.PrintError("Unmarshal error %s", err)
+					return
+				}
+				if req.Ret == protocol.RetStatus_Successs {
+					c.topicResponseChan <- true
+				} else {
+					c.topicResponseChan <- false
+				}
+				myLogger.Logger.Print("DeleteTopic response ", req)
 			default:
-				myLogger.Logger.Print("received key :", cmd )
+				myLogger.Logger.Print("received key :", cmd)
 			}
 			if response != nil { //ask
 				conn, ok := c.getBrokerConnAndLock(&data.connAddr)
 				if ok {
 					myLogger.Logger.Print("write response", response)
+					//err := conn.Put(response)
+					//if err != nil {
+					//	myLogger.Logger.PrintError("Put error %s", err)
+					//	c.getBrokerConnUnLock()
+					//	return
+					//}
 					conn.writeChan <- response
 					myLogger.Logger.Print("write response end")
-				}else{
+				} else {
 					myLogger.Logger.Print("conn cannot find", data.connAddr)
 				}
 				c.getBrokerConnUnLock()
@@ -385,22 +455,26 @@ func (c *Consumer) ReadLoop(handler Handler, exitChan <- chan bool) {
 }
 
 //默认消息处理函数
-func (c *Consumer) processMsg(msg *protocol.Message){
+func (c *Consumer) processMsg(msg *protocol.Message) {
 	myLogger.Logger.Print("Consumer receive data:", msg)
 }
 
 //修改消费者订阅的分区
-func (c *Consumer) changeConsumerPartition(Partitions []*protocol.Partition, rebalanceId int32) ([]byte){
-	myLogger.Logger.Print("changeConsumerPartition:", Partitions)
+func (c *Consumer) changeConsumerPartition(Partitions []*protocol.Partition, rebalanceId int32) []byte {
+	myLogger.Logger.Print("changeConsumerPartition:", Partitions, "id : ", rebalanceId)
 	c.partitions = Partitions
 	c.subscribePartition(rebalanceId)
 	return nil
 }
 
+//func (c *Consumer) waitCreateResponse() bool{
+//	return <- c.createTopicChan
+//}
+
 //订阅分区
-func (c *Consumer) subscribePartition(rebalanceId int32) error{
+func (c *Consumer) subscribePartition(rebalanceId int32) error {
 	myLogger.Logger.Print("subscribePartition len:", len(c.partitions))
-	for _, partition := range c.partitions{
+	for _, partition := range c.partitions {
 		requestData := &protocol.SubscribePartitionReq{
 			PartitionName: partition.Name,
 			GroupName:     c.groupName,
@@ -416,25 +490,29 @@ func (c *Consumer) subscribePartition(rebalanceId int32) error{
 			myLogger.Logger.PrintError("marshaling error", err)
 			return err
 		}
+		//conn, ok := c.getBrokerConnAndLock(&partition.Addr)
 		conn, ok := c.getBrokerConn(&partition.Addr)
 		if ok {
 			myLogger.Logger.Print("getBrokerConn success", partition.Addr)
-		}else{
+		} else {
 			err := c.Connect2Broker(partition.Addr)
 			if err != nil {
-				myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+				myLogger.Logger.PrintError("subscribePartition :", partition.Name, "err", err)
+				//c.getBrokerConnUnLock()
 				continue
 			}
 			conn, _ = c.getBrokerConn(&partition.Addr)
-			myLogger.Logger.Print("subscribePartion have not connect", partition.Addr)
+			myLogger.Logger.Print("subscribePartition have not connect", partition.Addr)
 		}
 
 		myLogger.Logger.Printf("write: %s", requestData)
 		err = conn.Put(reqData)
 		if err != nil {
 			myLogger.Logger.PrintError("subscribePartion :", partition.Name, "err", err)
+			//c.getBrokerConnUnLock()
 			continue
 		}
+		//c.getBrokerConnUnLock()
 	}
 	return nil
 

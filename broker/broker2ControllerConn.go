@@ -12,50 +12,39 @@ import (
 	"sync"
 	"time"
 )
+
 type broker2ControllerConn struct {
-	conn net.Conn
+	conn   net.Conn
 	reader *bufio.Reader
 	writer *bufio.Writer
 
-	broker *Broker
-
-	addr string //连接的地址
-	writeMsgChan     chan *protocol.Broker2Controller
-	exitChan chan string
+	broker       *Broker
+	addr         string //连接的地址
+	writeMsgChan chan *protocol.Broker2Controller
+	exitChan     chan string
 }
 
-//func NewBroker2ControllerConn(conn net.Conn, broker *Broker)  *broker2ControllerConn{
-//	c := &broker2ControllerConn{
-//		conn: conn,
-//		reader: bufio.NewReader(conn),
-//		writer: bufio.NewWriter(conn),
-//		broker: broker,
-//		writeMsgChan: make(chan []byte),
-//		exitChan: make(chan string),
-//	}
-//	return c
-//}
-
-
-func NewBroker2ControllerConn(addr string, broker *Broker)  (*broker2ControllerConn, error){
+//处理普通broker到controller的连接
+func NewBroker2ControllerConn(addr string, broker *Broker) (*broker2ControllerConn, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	c := &broker2ControllerConn{
-		addr:addr,
-		conn: conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
-		broker: broker,
-		writeMsgChan: make( chan *protocol.Broker2Controller),
-		exitChan: make(chan string),
+		addr:         addr,
+		conn:         conn,
+		reader:       bufio.NewReader(conn),
+		writer:       bufio.NewWriter(conn),
+		broker:       broker,
+		writeMsgChan: make(chan *protocol.Broker2Controller),
+		exitChan:     make(chan string),
 	}
 	go c.clientHandle()
 	return c, nil
 }
 
-func (b *broker2ControllerConn)clientHandle() {
+//连接处理函数
+func (b *broker2ControllerConn) clientHandle() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -72,7 +61,8 @@ func (b *broker2ControllerConn)clientHandle() {
 	myLogger.Logger.Print("a broker2ControllerConn leave")
 }
 
-func (b *broker2ControllerConn)Put(broker2ControllerData *protocol.Broker2Controller) error{
+//添加数据
+func (b *broker2ControllerConn) Put(broker2ControllerData *protocol.Broker2Controller) error {
 	select {
 	case b.writeMsgChan <- broker2ControllerData:
 		//myLogger.Logger.Print("do not have client")
@@ -83,21 +73,25 @@ func (b *broker2ControllerConn)Put(broker2ControllerData *protocol.Broker2Contro
 	return nil
 }
 
-func (b *broker2ControllerConn)clientExit() {
+//退出client
+func (b *broker2ControllerConn) clientExit() {
 	close(b.writeMsgChan)
 	close(b.exitChan)
 }
 
-func (b *broker2ControllerConn)Close() {
+//关闭连接
+func (b *broker2ControllerConn) Close() {
 	b.conn.Close()
 }
+
+//写数据协程
 func (b *broker2ControllerConn) writeLoop() {
-	for{
+	for {
 		select {
-		case s := <- b.exitChan:
+		case s := <-b.exitChan:
 			myLogger.Logger.Print(s)
 			goto exit
-		case broker2ControllerData := <- b.writeMsgChan: //向客户端发送了一条消息
+		case broker2ControllerData := <-b.writeMsgChan: //向客户端发送了一条消息
 			myLogger.Logger.Printf("broker2ControllerConn write %s", broker2ControllerData.String())
 			data, err := proto.Marshal(broker2ControllerData)
 			//myLogger.Logger.Print("send sendResponse len:", len(data), response)
@@ -113,12 +107,12 @@ func (b *broker2ControllerConn) writeLoop() {
 		}
 	}
 exit:
-	//myLogger.Logger.Print("close writeLoop")
+	myLogger.Logger.Print("close writeLoop")
 	return
 }
 
-func (b *broker2ControllerConn)Write(data []byte) (error){
-
+//写数据协程
+func (b *broker2ControllerConn) Write(data []byte) error {
 	var buf [4]byte
 	bufs := buf[:]
 	binary.BigEndian.PutUint32(bufs, uint32(len(data)))
@@ -139,8 +133,10 @@ func (b *broker2ControllerConn)Write(data []byte) (error){
 	}
 	return nil
 }
-func (b *broker2ControllerConn)readLoop() {
-	for{
+
+//读数据协程
+func (b *broker2ControllerConn) readLoop() {
+	for {
 		myLogger.Logger.Print("readLoop")
 		tmp := make([]byte, 4)
 		_, err := io.ReadFull(b.reader, tmp) //读取长度
@@ -162,27 +158,28 @@ func (b *broker2ControllerConn)readLoop() {
 		err = proto.Unmarshal(data, controller2BrokerData)
 		if err != nil {
 			myLogger.Logger.PrintError("Unmarshal error %s", err)
-		}else{
+		} else {
 			myLogger.Logger.Printf("receive broker2ControllerConn: %s", data)
 		}
 
 		switch controller2BrokerData.Key {
 		case protocol.Controller2BrokerKey_DeletePartition:
-			if controller2BrokerData.Partitions.Addr != b.broker.maddr.ClientListenAddr{
+			if controller2BrokerData.Partitions.Addr != b.broker.maddr.ClientListenAddr {
 				myLogger.Logger.PrintError("should not come here")
 				break
 			}
+			b.broker.partitionMapLock.Lock()
 			partition, ok := b.broker.getPartition(&controller2BrokerData.Partitions.Name)
 			if !ok {
 				myLogger.Logger.PrintWarning("try to delete not exist partition:", controller2BrokerData.Partitions.Name)
-			}else{
+			} else {
 				myLogger.Logger.Printf("Delete Partition : %s", controller2BrokerData.Partitions.Name)
 				b.broker.deletePartition(&controller2BrokerData.Partitions.Name)
 				partition.exit()
 			}
-
+			b.broker.partitionMapLock.Unlock()
 		case protocol.Controller2BrokerKey_CreadtPartition:
-			if controller2BrokerData.Partitions.Addr != b.broker.maddr.ClientListenAddr{
+			if controller2BrokerData.Partitions.Addr != b.broker.maddr.ClientListenAddr {
 				myLogger.Logger.PrintError("should not come here")
 				break
 			}

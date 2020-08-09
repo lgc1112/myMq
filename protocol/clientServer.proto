@@ -2,6 +2,7 @@ syntax = "proto3";
 import "message.proto";
 package protocol;
 
+//broker与 Client之间的数据
 message ClientServerHeader{
   ClientServerCmd cmd = 1;
   int32 msgLen = 2;
