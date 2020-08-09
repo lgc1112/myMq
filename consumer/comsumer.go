@@ -271,7 +271,9 @@ func (c *Consumer) SubscribeTopic(topicName string) error {
 		return err
 	}
 	myLogger.Logger.Printf("write: %s", requestData)
-
+	if c.controllerConn == nil {
+		return errors.New("controllerConn not exist")
+	}
 	if _, ok := c.getBrokerConnAndLock(&c.controllerConn.addr); ok { //查询连接是否失效
 		err = c.controllerConn.Put(reqData)
 	}

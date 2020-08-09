@@ -20,12 +20,14 @@ type diskQueue struct {
 	wFileNum int64
 	msgNum   int64 //消息数量
 
-	path          string
-	fileName      string
-	readyChan     chan []byte
-	writeChan     chan []byte
-	writeFinished chan error
-	exitChan      chan string
+	path               string
+	fileName           string
+	stopReadFlag       bool
+	readyChan          chan []byte
+	stopReadNotifyChan chan struct{}
+	writeChan          chan []byte
+	writeFinished      chan error
+	exitChan           chan string
 
 	maxBytesPerFile int64
 
@@ -37,13 +39,14 @@ type diskQueue struct {
 
 func NewDiskQueue(path string) *diskQueue {
 	d := &diskQueue{
-		path:            path,
-		readyChan:       make(chan []byte),
-		writeChan:       make(chan []byte),
-		exitChan:        make(chan string),
-		writeFinished:   make(chan error),
-		maxBytesPerFile: MaxBytesPerFile,
-		fileName:        path + "disk.data",
+		path:               path,
+		readyChan:          make(chan []byte),
+		stopReadNotifyChan: make(chan struct{}),
+		writeChan:          make(chan []byte),
+		exitChan:           make(chan string),
+		writeFinished:      make(chan error),
+		maxBytesPerFile:    MaxBytesPerFile,
+		fileName:           path + "disk.data",
 	}
 	err := os.MkdirAll(path, os.ModePerm)
 	if err != nil {
@@ -57,12 +60,18 @@ func NewDiskQueue(path string) *diskQueue {
 }
 
 func (d *diskQueue) exit() error {
-	err := d.sync() //保存数据
+	err := d.sync() //刷盘
 	close(d.readyChan)
 	close(d.writeChan)
+	close(d.stopReadNotifyChan)
 	close(d.exitChan)
 	close(d.writeFinished)
 	return err
+}
+
+//通知线程停止读数据，通常是退出时使用
+func (d *diskQueue) StopRead() {
+	d.stopReadNotifyChan <- struct{}{}
 }
 
 //后台读取磁盘数据
@@ -71,7 +80,7 @@ func (d *diskQueue) ioLoop() {
 	var err error
 	var readyChan chan []byte
 	for {
-		if d.msgNum > 0 { //磁盘中有数据可读
+		if d.msgNum > 0 && !d.stopReadFlag { //磁盘中有数据可读
 			if readyData == nil { //没有要发送的数据，可以读新的数据发送了
 				readyData, err = d.readDiskMsg()
 				if err != nil {
@@ -85,6 +94,8 @@ func (d *diskQueue) ioLoop() {
 			readyChan = nil //无数据，让其阻塞
 		}
 		select {
+		case <-d.stopReadNotifyChan: //要停止读数据了
+			d.stopReadFlag = true
 		case <-d.exitChan:
 			goto exit
 		case readyChan <- readyData: //尝试将数据发送到readChan
@@ -103,9 +114,14 @@ exit:
 }
 
 //存储数据到磁盘
-func (d *diskQueue) storeData(data []byte) error {
+func (d *diskQueue) StoreData(data []byte) error {
 	d.writeChan <- data
 	return <-d.writeFinished
+}
+
+//存储数据到磁盘
+func (d *diskQueue) Close() {
+	d.exitChan <- "b"
 }
 
 //读取磁盘数据
