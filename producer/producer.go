@@ -10,22 +10,23 @@ import (
 	"github.com/golang/protobuf/proto"
 	"sync"
 )
+
 const openCluster bool = true
 const logDir string = "./producerlog/"
-const defaultEtcdAddr string ="9.135.8.253:2379" //etcd服务器地址
-const numVirtualNodes int = 3 //一直性哈希的虚拟节点数
+const defaultEtcdAddr string = "9.135.8.253:2379" //etcd服务器地址
+const numVirtualNodes int = 3                     //一直性哈希的虚拟节点数
 type Producer struct {
-	addrs   []string //broker的地址，不使用集群模式时需要传入
-	controllerConn *producerConn //保存到master的连接
-	partitionMapLock sync.RWMutex
-	partitionMap map[string] []*protocol.Partition//topic名 映射到 protocol.Partition
-	sendIdx int
-	connectState int32
+	addrs             []string      //broker的地址，不使用集群模式时需要传入
+	controllerConn    *producerConn //保存到master的连接
+	partitionMapLock  sync.RWMutex
+	partitionMap      map[string][]*protocol.Partition //topic名 映射到 protocol.Partition
+	sendIdx           int
+	connectState      int32
 	brokerConnMapLock sync.RWMutex
-	brokerConnMap map[string] *producerConn  //broker ip 映射到 producerConn
-	pubishAsk     chan string
-	etcdClient *etcdClient.ClientEtcdClient
-	consistenceHash map[string] *consistenthash.ConsistenceHash
+	brokerConnMap     map[string]*producerConn //broker ip 映射到 producerConn
+	pubishAsk         chan string
+	etcdClient        *etcdClient.ClientEtcdClient
+	consistenceHash   map[string]*consistenthash.ConsistenceHash
 }
 
 //新建生产者实例
@@ -35,26 +36,26 @@ func NewProducer(addrs []string) (*Producer, error) {
 		return nil, err
 	}
 	p := &Producer{
-		addrs: addrs,
-		partitionMap: make(map[string] []*protocol.Partition),
-		brokerConnMap: make(map[string] *producerConn ),
-		pubishAsk: make(chan string),
-		consistenceHash: make(map[string] *consistenthash.ConsistenceHash),
+		addrs:           addrs,
+		partitionMap:    make(map[string][]*protocol.Partition),
+		brokerConnMap:   make(map[string]*producerConn),
+		pubishAsk:       make(chan string),
+		consistenceHash: make(map[string]*consistenthash.ConsistenceHash),
 	}
 
-	if openCluster{
+	if openCluster {
 		etcdAddr := defaultEtcdAddr
 		p.etcdClient, err = etcdClient.NewClientEtcdClient(p, &etcdAddr)
-		if err != nil{
+		if err != nil {
 			myLogger.Logger.PrintError(err)
 			return nil, err
 		}
 		err = p.connect2Controller() //连接到controller
-		if err != nil{
+		if err != nil {
 			myLogger.Logger.PrintError(err)
 			return nil, err
 		}
-	}else{
+	} else {
 		err = p.Connect2Brokers()
 	}
 	if err != nil {
@@ -64,7 +65,7 @@ func NewProducer(addrs []string) (*Producer, error) {
 }
 
 //连接到controller服务器
-func (p *Producer) connect2Controller() error{
+func (p *Producer) connect2Controller() error {
 	masterAddr, err := p.etcdClient.GetControllerAddr() //获取controller地址
 	if err != nil {
 		myLogger.Logger.PrintError(err)
@@ -94,7 +95,7 @@ func (p *Producer) TopicChange(topic string, partition *protocol.Partitions) {
 	myLogger.Logger.Print("TopicChange", topic, partition)
 	p.partitionMapLock.RLock()
 	defer p.partitionMapLock.RUnlock()
-	if _, ok := p.partitionMap[topic]; !ok{ //没有订阅
+	if _, ok := p.partitionMap[topic]; !ok { //没有订阅
 		return
 	}
 	//p.partitionMap[topic] = partition.Partition //更新分区，两种方式均可
@@ -123,10 +124,10 @@ func (p *Producer) getBrokerConn(addr *string) (*producerConn, bool) {
 }
 
 //关闭生产者的所有连接
-func (p *Producer) Close(){
+func (p *Producer) Close() {
 	p.brokerConnMapLock.RLock()
 	defer p.brokerConnMapLock.RUnlock()
-	for _, conn := range p.brokerConnMap{
+	for _, conn := range p.brokerConnMap {
 		err := conn.Close()
 		if err != nil {
 			myLogger.Logger.PrintError("Close err :", conn.addr)
@@ -159,7 +160,7 @@ func (p *Producer) Connect2Brokers() error {
 
 //连接到指定地址的broker
 func (p *Producer) connect2Broker(addr string) error {
-	if _, ok := p.getBrokerConn(&addr); ok{
+	if _, ok := p.getBrokerConn(&addr); ok {
 		myLogger.Logger.Printf("connecting to existing broker - %s", addr)
 		return nil
 	}
@@ -175,8 +176,8 @@ func (p *Producer) connect2Broker(addr string) error {
 }
 
 //删除指定topic
-func (p *Producer) DeleteTopic(topic string){
-	if p.controllerConn == nil{
+func (p *Producer) DeleteTopic(topic string) {
+	if p.controllerConn == nil {
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return
 	}
@@ -201,20 +202,19 @@ func (p *Producer) DeleteTopic(topic string){
 
 	myLogger.Logger.Printf("DeleteTopic %s ", topic)
 
-
-	cmd, msgBody, err:= p.controllerConn.readResponse()
+	cmd, msgBody, err := p.controllerConn.readResponse()
 	if err != nil {
 		myLogger.Logger.Print(err)
 		return
 	}
-	if *cmd == protocol.ClientServerCmd_CmdDeleteTopicRsp{
+	if *cmd == protocol.ClientServerCmd_CmdDeleteTopicRsp {
 		req := &protocol.DeleteTopicRsp{}
 		err = proto.Unmarshal(msgBody, req) //得到消息体
 		if err != nil {
 			myLogger.Logger.PrintError("Unmarshal error %s", err)
 			return
 		}
-		if req.Ret == protocol.RetStatus_Successs{
+		if req.Ret == protocol.RetStatus_Successs {
 			delete(p.partitionMap, topic)
 			p.consistenceHash[topic] = nil
 		}
@@ -223,13 +223,13 @@ func (p *Producer) DeleteTopic(topic string){
 }
 
 //创建指定数量的topic
-func (p *Producer) CreatTopic(topic string, num int32){
-	if p.controllerConn == nil{
+func (p *Producer) CreatTopic(topic string, num int32) {
+	if p.controllerConn == nil {
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return
 	}
 	requestData := &protocol.CreatTopicReq{
-		TopicName: topic,
+		TopicName:    topic,
 		PartitionNum: num,
 	}
 	data, err := proto.Marshal(requestData)
@@ -249,19 +249,19 @@ func (p *Producer) CreatTopic(topic string, num int32){
 	}
 	myLogger.Logger.Printf("CreatTopic %s : %d", topic, num)
 
-	cmd, msgBody, err:= p.controllerConn.readResponse()
+	cmd, msgBody, err := p.controllerConn.readResponse()
 	if err != nil {
 		myLogger.Logger.Print(err)
 		return
 	}
-	if *cmd == protocol.ClientServerCmd_CmdCreatTopicRsp{
+	if *cmd == protocol.ClientServerCmd_CmdCreatTopicRsp {
 		req := &protocol.CreatTopicRsp{}
 		err = proto.Unmarshal(msgBody, req) //得到消息体
 		if err != nil {
 			myLogger.Logger.PrintError("Unmarshal error %s", err)
 			return
 		}
-		if req.Ret == protocol.RetStatus_Successs{//成功获取分区
+		if req.Ret == protocol.RetStatus_Successs { //成功获取分区
 			p.partitionMap[topic] = req.Partitions
 			p.changeConsistentHashMap(p.partitionMap[topic], topic)
 		}
@@ -271,8 +271,8 @@ func (p *Producer) CreatTopic(topic string, num int32){
 }
 
 //获取某topic的分区
-func (p *Producer) GetTopicPartition(topic string) error{
-	if p.controllerConn == nil{
+func (p *Producer) GetTopicPartition(topic string) error {
+	if p.controllerConn == nil {
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return nil
 	}
@@ -294,18 +294,18 @@ func (p *Producer) GetTopicPartition(topic string) error{
 	p.controllerConn.Write(reqData)
 	myLogger.Logger.Printf("GetTopicPartion %s : %s", topic, requestData)
 
-	cmd, msgBody, err:= p.controllerConn.readResponse()
+	cmd, msgBody, err := p.controllerConn.readResponse()
 	if err != nil {
 		myLogger.Logger.Print(err)
 		return err
 	}
-	if *cmd == protocol.ClientServerCmd_CmdGetPublisherPartitionRsp{
+	if *cmd == protocol.ClientServerCmd_CmdGetPublisherPartitionRsp {
 		req := &protocol.GetPublisherPartitionRsp{}
 		err = proto.Unmarshal(msgBody, req) //得到消息体
 		if err != nil {
 			myLogger.Logger.PrintError("Unmarshal error %s", err)
 			return err
-		}else{
+		} else {
 			myLogger.Logger.Printf("receive GetConsumerPartitionReq: %s", req)
 		}
 		p.partitionMap[topic] = req.Partitions
@@ -316,9 +316,9 @@ func (p *Producer) GetTopicPartition(topic string) error{
 }
 
 //修改一致性哈希表
-func (p *Producer) changeConsistentHashMap(partitions []*protocol.Partition, topic string)  {
+func (p *Producer) changeConsistentHashMap(partitions []*protocol.Partition, topic string) {
 	p.consistenceHash[topic] = consistenthash.New(numVirtualNodes)
-	for _, par := range partitions{
+	for _, par := range partitions {
 		data, err := proto.Marshal(par)
 		if err != nil {
 			myLogger.Logger.PrintError("marshaling error", err)
@@ -329,7 +329,7 @@ func (p *Producer) changeConsistentHashMap(partitions []*protocol.Partition, top
 }
 
 //获取指定key的一致性哈希的分区
-func (p *Producer) getConsistentPartittion(topic string, key string)  (*protocol.Partition, error){
+func (p *Producer) getConsistentPartittion(topic string, key string) (*protocol.Partition, error) {
 	data, err := p.consistenceHash[topic].SearchNode(key)
 	if err != nil {
 		myLogger.Logger.PrintError(" error %s", err)
@@ -345,8 +345,8 @@ func (p *Producer) getConsistentPartittion(topic string, key string)  (*protocol
 }
 
 //使用轮询的方式获取某topic的分区
-func (p *Producer) getRandomPartition(topic string) (*protocol.Partition, error){ //循环读取
-	if p.controllerConn == nil{
+func (p *Producer) getRandomPartition(topic string) (*protocol.Partition, error) { //循环读取
+	if p.controllerConn == nil {
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return nil, errors.New("controllerConn Not exist")
 	}
@@ -362,20 +362,20 @@ func (p *Producer) getRandomPartition(topic string) (*protocol.Partition, error)
 		}
 	}
 	len := len(partitions)
-	if len == 0{
+	if len == 0 {
 		myLogger.Logger.Print("getPartition err")
 		return nil, errors.New("do not have partition")
 	}
 	p.sendIdx++ //轮询
-	if p.sendIdx >= len{
+	if p.sendIdx >= len {
 		p.sendIdx %= len
 	}
 	return partitions[p.sendIdx], nil
 }
 
 //指定key指来获取一致性哈希分区
-func (p *Producer) getPartitionbyKey(topic string, key string) (*protocol.Partition, error){ //循环读取
-	if p.controllerConn == nil{
+func (p *Producer) getPartitionbyKey(topic string, key string) (*protocol.Partition, error) { //循环读取
+	if p.controllerConn == nil {
 		myLogger.Logger.PrintError("controllerConn Not exist")
 		return nil, errors.New("controllerConn Not exist")
 	}
@@ -391,12 +391,12 @@ func (p *Producer) getPartitionbyKey(topic string, key string) (*protocol.Partit
 		}
 	}
 	len := len(partitions)
-	if len == 0{
+	if len == 0 {
 		myLogger.Logger.Print("getPartition err")
 		return nil, errors.New("do not have partition")
 	}
 
-	par , err := p.getConsistentPartittion(topic, key)
+	par, err := p.getConsistentPartittion(topic, key)
 	if err != nil {
 		myLogger.Logger.PrintError("changeConsistentHashMap error", err)
 		return nil, err
@@ -404,11 +404,10 @@ func (p *Producer) getPartitionbyKey(topic string, key string) (*protocol.Partit
 	return par, nil
 }
 
-
 //同步方式发布消息
-func (p *Producer) PubilshSync(partition *protocol.Partition, msg *protocol.Message) error{
+func (p *Producer) PubilshSync(partition *protocol.Partition, msg *protocol.Message) error {
 
-	if partition == nil{
+	if partition == nil {
 		return errors.New("cannot get partition")
 	}
 	brokerConn, ok := p.getBrokerConn(&partition.Addr)
@@ -422,7 +421,7 @@ func (p *Producer) PubilshSync(partition *protocol.Partition, msg *protocol.Mess
 
 	requestData := &protocol.PublishReq{
 		PartitionName: partition.Name,
-		Msg: msg,
+		Msg:           msg,
 	}
 	data, err := proto.Marshal(requestData)
 	if err != nil {
@@ -440,25 +439,25 @@ func (p *Producer) PubilshSync(partition *protocol.Partition, msg *protocol.Mess
 		return err
 	}
 	myLogger.Logger.Printf("Pubilsh %s", requestData)
+	myLogger.Logger.PrintfDebug2("Pubilsh %s", requestData)
 
-
-	cmd, msgBody, err:= brokerConn.readResponse()
-	if err != nil{
+	cmd, msgBody, err := brokerConn.readResponse()
+	if err != nil {
 		myLogger.Logger.PrintError("requestData error", err)
 		return err
 	}
-	if *cmd == protocol.ClientServerCmd_CmdGetPublisherPartitionRsp{
+	if *cmd == protocol.ClientServerCmd_CmdGetPublisherPartitionRsp {
 		req := &protocol.PushMsgRsp{}
 		err = proto.Unmarshal(msgBody, req) //得到消息体
 		if err != nil {
 			myLogger.Logger.PrintError("Unmarshal error %s", err)
 			return err
-		}else{
+		} else {
 			myLogger.Logger.Printf("receive GetConsumerPartitionReq: %s", req)
 		}
-		if req.Ret == protocol.RetStatus_Successs{
+		if req.Ret == protocol.RetStatus_Successs {
 			myLogger.Logger.Print("PublishSuccess")
-		}else{
+		} else {
 			//myLogger.Logger.Print("PublishError")
 			return errors.New("PublishError")
 		}
@@ -467,23 +466,23 @@ func (p *Producer) PubilshSync(partition *protocol.Partition, msg *protocol.Mess
 }
 
 //发布消息到topic
-func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
+func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error {
 	msg := &protocol.Message{
 		Priority: prioroty,
-		Msg: data,
+		Msg:      data,
 	}
 	partition, err := p.getRandomPartition(topic)
-	if err != nil{
+	if err != nil {
 		return err
 	}
 	err = p.PubilshSync(partition, msg)
-	if err != nil{ //该分区所在broker已经失效，删除
+	if err != nil { //该分区所在broker已经失效，删除
 		p.partitionMapLock.Lock()
 		defer p.partitionMapLock.Unlock()
 		p.deleteBrokerConn(&partition.Addr)
-		var tmp[]*protocol.Partition
-		for _, par := range p.partitionMap[topic]{ //删除所有失效分区
-			if par.Addr != partition.Addr{
+		var tmp []*protocol.Partition
+		for _, par := range p.partitionMap[topic] { //删除所有失效分区
+			if par.Addr != partition.Addr {
 				tmp = append(tmp, par)
 			}
 		}
@@ -498,23 +497,23 @@ func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 }
 
 //根据key一致性哈希后发布消息到topic
-func (p *Producer) PubilshBykey(topic string, data []byte, prioroty int32, key string) error{
+func (p *Producer) PubilshBykey(topic string, data []byte, prioroty int32, key string) error {
 	msg := &protocol.Message{
 		Priority: prioroty,
-		Msg: data,
+		Msg:      data,
 	}
 	partition, err := p.getPartitionbyKey(topic, key)
-	if err != nil{
+	if err != nil {
 		return err
 	}
 	err = p.PubilshSync(partition, msg)
-	if err != nil{ //该分区所在已经失效，删除
+	if err != nil { //该分区所在已经失效，删除
 		p.partitionMapLock.Lock()
 		defer p.partitionMapLock.Unlock()
 		p.deleteBrokerConn(&partition.Addr)
-		var tmp[]*protocol.Partition
-		for _, par := range p.partitionMap[topic]{ //删除所有失效分区
-			if par.Addr != partition.Addr{
+		var tmp []*protocol.Partition
+		for _, par := range p.partitionMap[topic] { //删除所有失效分区
+			if par.Addr != partition.Addr {
 				tmp = append(tmp, par)
 			}
 		}
@@ -526,19 +525,19 @@ func (p *Producer) PubilshBykey(topic string, data []byte, prioroty int32, key s
 }
 
 //发布消息到指定分区
-func (p *Producer) Pubilsh2Partition(topic string, data []byte, prioroty int32, partition *protocol.Partition) error{
+func (p *Producer) Pubilsh2Partition(topic string, data []byte, prioroty int32, partition *protocol.Partition) error {
 	msg := &protocol.Message{
 		Priority: prioroty,
-		Msg: data,
+		Msg:      data,
 	}
 	err := p.PubilshSync(partition, msg)
-	if err != nil{ //该分区所在已经失效，删除
+	if err != nil { //该分区所在已经失效，删除
 		p.partitionMapLock.Lock()
 		defer p.partitionMapLock.Unlock()
 		p.deleteBrokerConn(&partition.Addr)
-		var tmp[]*protocol.Partition
-		for _, par := range p.partitionMap[topic]{ //删除所有失效分区
-			if par.Addr != partition.Addr{
+		var tmp []*protocol.Partition
+		for _, par := range p.partitionMap[topic] { //删除所有失效分区
+			if par.Addr != partition.Addr {
 				tmp = append(tmp, par)
 			}
 		}
@@ -549,23 +548,23 @@ func (p *Producer) Pubilsh2Partition(topic string, data []byte, prioroty int32, 
 }
 
 //发布消息到，不等待ack
-func (p *Producer) PubilshWithoutAck(topic string, data []byte, prioroty int32) error{
+func (p *Producer) PubilshWithoutAck(topic string, data []byte, prioroty int32) error {
 	msg := &protocol.Message{
 		Priority: prioroty,
-		Msg: data,
+		Msg:      data,
 	}
 	partition, err := p.getRandomPartition(topic)
-	if err != nil{
+	if err != nil {
 		return err
 	}
 	err = p.pubilshWithoutAckInternal(partition, msg)
-	if err != nil{ //该分区所在已经失效，删除
+	if err != nil { //该分区所在已经失效，删除
 		p.partitionMapLock.Lock()
 		defer p.partitionMapLock.Unlock()
 		p.deleteBrokerConn(&partition.Addr)
-		var tmp[]*protocol.Partition
-		for _, par := range p.partitionMap[topic]{ //删除所有失效分区
-			if par.Addr != partition.Addr{
+		var tmp []*protocol.Partition
+		for _, par := range p.partitionMap[topic] { //删除所有失效分区
+			if par.Addr != partition.Addr {
 				tmp = append(tmp, par)
 			}
 		}
@@ -574,11 +573,10 @@ func (p *Producer) PubilshWithoutAck(topic string, data []byte, prioroty int32) 
 	return err
 }
 
-
 //发布消息到，不等待ack内部实现
-func (p *Producer) pubilshWithoutAckInternal( partition *protocol.Partition, msg *protocol.Message) error{
+func (p *Producer) pubilshWithoutAckInternal(partition *protocol.Partition, msg *protocol.Message) error {
 
-	if partition == nil{
+	if partition == nil {
 		return errors.New("cannot get partition")
 	}
 	brokerConn, ok := p.getBrokerConn(&partition.Addr)
@@ -592,7 +590,7 @@ func (p *Producer) pubilshWithoutAckInternal( partition *protocol.Partition, msg
 
 	requestData := &protocol.PublishReq{
 		PartitionName: partition.Name,
-		Msg: msg,
+		Msg:           msg,
 	}
 	data, err := proto.Marshal(requestData)
 	if err != nil {
@@ -613,7 +611,6 @@ func (p *Producer) pubilshWithoutAckInternal( partition *protocol.Partition, msg
 	myLogger.Logger.Printf("Pubilsh %s", requestData)
 	return nil
 }
-
 
 //func (p *Producer) Pubilsh(topic string, data []byte, prioroty int32) error{
 //	msg := &protocol.Message{
@@ -707,4 +704,3 @@ func (p *Producer) pubilshWithoutAckInternal( partition *protocol.Partition, msg
 //		}
 //	}
 //}
-

@@ -167,7 +167,7 @@ func producerHandle(p *producer.Producer, exitChan <-chan bool, sendMsg string) 
 
 //每个生产者的处理函数，同步发送数据
 func producerHandleSync(p *producer.Producer, exitChan <-chan bool) {
-	var i int64
+	var i int32 = 1
 	for {
 		select {
 		case _, ok := <-exitChan:
@@ -175,17 +175,17 @@ func producerHandleSync(p *producer.Producer, exitChan <-chan bool) {
 				return
 			}
 		default:
-			s := fmt.Sprintf("hello : %d", i)
+			s := fmt.Sprintf("Msg : %d, Priotity : i", i)
 			i++
 			time.Sleep(1000 * time.Millisecond)
-			err := p.Pubilsh("fff", []byte(s), 0)
+			err := p.Pubilsh("fff", []byte(s), i)
 			if err != nil {
 				myLogger.Logger.Print(err)
 				//os.Exit(1)
 				i--
 				continue
 			}
-			atomic.AddInt32(&sum, 1)
+			//atomic.AddInt32(&sum, 1)
 		}
 	}
 }

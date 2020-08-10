@@ -2,7 +2,9 @@
 
 -----
 ## 1整体设计框架及介绍
-![avatar](./picture/frameworks.png)
+![avatar](./picture/逻辑结构.png)
+
+![avatar](./picture/集群结构.png)
 以上是我的分布式消息队列设计框架图。框架主要参考了kafka的形式，在kafka的基础上精简了很多东西，但其中的基础概念还是差不多的：
 
 消费者组：每个消费者必须指定所在的消费者组，一个topic上的一条消息只能被消费者组内的其中一个消费者消费（集群消费，如上图中发到topic2的消息只会被group3中的某个消费者消费）。一个topic上的一条消息会同时被不同的消费者组消费（广播消费，如上图中的group1和group2同时消费发到topic1中的所有消息）。
@@ -29,18 +31,9 @@ partition：分区，分区的设计是kafka和rocketMQ可以实现高吞吐量�
 
 因为中期答辩的时间比较紧，所以打算先实现一个单机的broker controller，在broker controller中先完成简单的发布订阅模型、消息通知机制、优先队列、持久化堆积等功能。
 
-# 1单机版本架构及原理分析
-![avatar](./picture/framework.png)
+# 1broker内部架构
 
-图中的broker有topic1，topic2两个主题。topic1中有三个分区，topic2有4个分区。消费者分为两个消费者组group1和group2，其中group1订阅了topic1，group2同时订阅了topic1和topic2。它们的内部逻辑连接如上图所示。
-
-broker分别使用一个Goroutine处理一个consumer的连接，每个连接goroutine中都创建一个读取管道，该goroutine负责不断从它对应的channel管道中读取订阅消息并推送到consumer。例如broker和consumer1的连接goroutine监听的channel1。在channel1中有消息时，将其推送到consumer1。
-
-broker分别开启一个goroutine处理一个partition，每一个partition使用一个channel接收消息。该goroutine不断读取发到对应channel管道中的消息，并根据该topic下订阅的消费者组group找到对应的消费者channel，复制消息到这些channel中。例如，T1P1所在的goroutine监听该分区的channel，channel中有消息时，立即将其复制到订阅的消费者组group1中对应的channel1和group2中对应的channel4中。这样两个消费者组就可以同时消费到这条消息。
-
-broker对于每一个生产者也分别使用一个Goroutine处理它们之间的连接。接收到生产者发来到消息时，解析得到消息发布的topic和partition，将消息放到对应partition的channel中即可。
-
-这样子就实现了broker中的一个简单的消息接收和分发的功能。注意以上消息在channel中的传递并不是真的把消息复制好几遍，channel中传递和复制的消息都只是消息的地址。broker接收到生产者发来的消息时，只会把它读取到一个结构体中，并把结构体指针放到channel中处理即可，go 语言的垃圾回收机制会在变量不可达时自动回收这个结构体。
+![avatar](./picture/broker内部结构.png)
 
 # 2 broker实现方案
 
@@ -170,18 +163,8 @@ sendReadyNum(num int32)//告诉broker该消费者中最大可接受的消息数�
 
 待续。
 
-# 6.时间安排
+# 6.时间表
+![avatar](./picture/时间表.png)
 
-7.20 完成broker中通信、各个功能对象（topic，partition等）的编程。
 
-7.22 完成简单的生产者和消费者接口，实现创建topic和分区、根据消费者数量分配分区和发布订阅的功能。
 
-7.24 实现持久化、优先队列的功能。
-
-7.27 实现web服务，给生产者提供RESTful api
-
-7.29 简单压测、准备中期答辩PPT。
-
-7.30 中期答辩
-
-未完待续...
