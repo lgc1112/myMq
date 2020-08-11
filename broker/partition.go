@@ -185,6 +185,7 @@ exit:
 	//p.exit()
 }
 
+//安全退出
 func (p *partition) exit() {
 	if !p.isNativePartition { //不是本地的分区
 		return
@@ -264,6 +265,7 @@ func (p *partition) addComsummerClient(client *client, groupName string, rebalan
 
 }
 
+//使消费者失效
 func (p *partition) invalidComsummerClient(client *client, groupName string) { //使得client失效，因为已经被删除
 	p.subscribedGroupsLock.Lock()
 	g, ok := p.subscribedGroups[groupName]

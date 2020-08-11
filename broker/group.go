@@ -33,6 +33,7 @@ func newGroup(name string, rebalanceID int32, broker *Broker) *group {
 	}
 }
 
+//获取client的分区
 func (g *group) getClientPartition(clientId int64) []*protocol.Partition {
 	g.clientsLock.RLock()
 	if containClient(g.clients, clientId) {
@@ -45,6 +46,7 @@ func (g *group) getClientPartition(clientId int64) []*protocol.Partition {
 	return nil
 }
 
+//获取订阅的topic
 func (g *group) getSubscribedTopics() []string {
 	var topics []string
 	g.subscribedTopicsLock.RLock()
@@ -114,6 +116,8 @@ func (g *group) addTopic(topic *topic) bool {
 	myLogger.Logger.Print("group addTopic success")
 	return true
 }
+
+//判断是否包含topic
 func containTopic(items []*topic, item *topic) bool {
 	for i, eachItem := range items {
 		if eachItem.name == item.name {
@@ -142,6 +146,7 @@ func (g *group) deleteTopic1(topic *topic) {
 	g.subscribedTopicsLock.Unlock()
 }
 
+//通知client分区分配
 func (g *group) notifyClients(rebalanceID int32) {
 	myLogger.Logger.Print("notifyClients ", rebalanceID)
 	//g.clientsLock.Lock()
@@ -174,6 +179,7 @@ func (g *group) notifyClients(rebalanceID int32) {
 	//myLogger.Logger.Print("notifyClients end")
 }
 
+//分区均衡
 func (g *group) Rebalance() {
 	myLogger.Logger.Print("rebalance")
 	k := 0

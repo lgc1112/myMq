@@ -13,6 +13,7 @@ import (
 )
 
 const defaultreadyNum = 1000
+const writeimmediately = true
 
 type client struct {
 	id     int64
@@ -55,10 +56,6 @@ func NewClient(conn net.Conn, broker *Broker) *client {
 	return c
 }
 
-//func (c *client)Close() {
-//	c.conn.Close()
-//}
-
 //client处理函数
 func (c *client) ClientHandle() {
 	var wg sync.WaitGroup
@@ -87,18 +84,6 @@ func (c *client) getWriteCmdChan() chan []byte {
 
 //退出前回收数据
 func (c *client) clientExit() {
-	//if c.isbrokerExit { //如果是broker退出了就直接回收退出即可，不用做负载均衡删除client等操作。
-	//	myLogger.Logger.Print("exit client isbrokerExit:", c.id)
-	//	waitFinished := make(chan bool)
-	//	c.broker.clientChangeChan <- &clientChange{false, c, waitFinished} //放到broker 的readLoop协程中进行处理，避免频繁使用锁
-	//	<-waitFinished                                                     //等待移除
-	//
-	//	close(c.writeMsgChan)
-	//	close(c.writeCmdChan)
-	//	close(c.changeReadyNum)
-	//	close(c.exitChan)
-	//	return
-	//}
 
 	myLogger.Logger.Print("exit client :", c.id)
 	waitFinished := make(chan bool)
@@ -174,6 +159,12 @@ func (c *client) writeLoop() {
 			if err != nil {
 				myLogger.Logger.PrintError("writer error: ", err)
 				continue
+			}
+			if writeimmediately {
+				err = c.writer.Flush()
+				if err != nil {
+					myLogger.Logger.PrintError(err)
+				}
 			}
 		case <-timeTicker.C: //定时也flush
 			err := c.writer.Flush()
@@ -356,10 +347,6 @@ func (c *client) readLoop() {
 
 //处理消费成功的commit
 func (c *client) consumeSuccess(partitionName string, groupName string, msgId int32, priority int32) (response []byte) {
-	//c.broker.partitionMapLock.RLock()
-	//defer c.broker.partitionMapLock.RUnlock()
-	//
-	//partition, ok := c.broker.getPartition(&partitionName)
 	partition, ok := c.broker.getPartitionAndLock(&partitionName)
 	defer c.broker.getPartitionUnlock()
 	if !ok {
@@ -367,7 +354,7 @@ func (c *client) consumeSuccess(partitionName string, groupName string, msgId in
 		return nil
 	} else {
 		isPriorityMsg := false
-		if priority >= 0 {
+		if priority > 0 {
 			isPriorityMsg = true
 		}
 		msgAskData := &msgAskData{
@@ -382,9 +369,6 @@ func (c *client) consumeSuccess(partitionName string, groupName string, msgId in
 
 //处理client发布的消息
 func (c *client) publish(partitionName string, msg *protocol.Message) (response []byte) {
-	//c.broker.partitionMapLock.RLock()
-	//defer c.broker.partitionMapLock.RUnlock()
-	//partition, ok := c.broker.getPartition(&partitionName)
 	partition, ok := c.broker.getPartitionAndLock(&partitionName)
 	defer c.broker.getPartitionUnlock()
 	if !ok {

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +18,7 @@ var sum int32
 
 const testTime = 10000 * time.Second //测试时间
 var producerNum = 1
-var msgLen = 100
+var msgLen = 10
 var reCreateTopic = false //是否需要重建topic
 var partitionNum = 1
 
@@ -42,6 +43,7 @@ func main() {
 
 	brokerAddrs := []string{*brokerAddr}
 	//stressTest(brokerAddrs)
+	//latencyTest(brokerAddrs)
 	NormalTest(brokerAddrs)
 }
 
@@ -101,6 +103,40 @@ exit:
 
 }
 
+//延迟测试代码
+func latencyTest(addr []string) {
+	fmt.Println("producerNum:", producerNum, " partitionNum:", partitionNum, " reCreateTopic", reCreateTopic, " msgLen:", msgLen)
+	var wg sync.WaitGroup
+	exitChan := make(chan bool)
+	//sendMsg := generateString(msgLen)
+	for i := 0; i < producerNum; i++ {
+		p, err := producer.NewProducer(addr)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		if i == 0 && reCreateTopic {
+			p.DeleteTopic("fff") //先删除原来的分区
+			//time.Sleep(1000 * time.Millisecond)
+			p.CreatTopic("fff", int32(partitionNum)) //创建新的分区
+		}
+		wg.Add(1)
+		go func() {
+			producerHandleLatencyTest(p, exitChan)
+			//atomic.AddInt64(&sum, times)
+			wg.Done()
+		}()
+	}
+	exitSignal := make(chan os.Signal)
+	signal.Notify(exitSignal, os.Interrupt, os.Kill) //监听信号
+
+	s := <-exitSignal //退出信号来了
+	myLogger.Logger.Print("exitSignal:", s)
+	close(exitChan) //关闭退出管道，通知所有协程退出
+	wg.Wait()       //等待退出
+
+}
+
 func NormalTest(addr []string) {
 	fmt.Println("producerNum:", producerNum, " partitionNum:", partitionNum, " reCreateTopic", reCreateTopic)
 	var wg sync.WaitGroup
@@ -129,16 +165,6 @@ func NormalTest(addr []string) {
 	myLogger.Logger.Print("exitSignal:", s)
 	close(exitChan) //关闭退出管道，通知所有协程退出
 	wg.Wait()
-	//starTime := time.Now()
-	//timeTicker := time.NewTicker(testTime)
-	//atomic.StoreInt32(&sum, 0)
-	//myLogger.Logger.PrintfDebug("%d", sum )
-	//
-	//<- timeTicker.C
-	//endTime := time.Now()
-	//seconds := int64(testTime / time.Second)
-	//seconds = int64(endTime.Sub(starTime).Seconds())
-	//myLogger.Logger.PrintfDebug("partitionNum %d, producerNum: %d, test time : %d , send times : %d, qps : %d",partitionNum, producerNum, seconds, sum, int64(sum) / seconds)
 }
 
 //每个生产者的处理函数，不等的ack
@@ -186,6 +212,33 @@ func producerHandleSync(p *producer.Producer, exitChan <-chan bool) {
 			i++
 			//atomic.AddInt32(&sum, 1)
 		}
+	}
+}
+
+//每个生产者的处理函数，同步发送数据
+func producerHandleLatencyTest(p *producer.Producer, exitChan <-chan bool) {
+	var i int32 = 1
+	for {
+		select {
+		case _, ok := <-exitChan:
+			if !ok {
+				return
+			}
+		default:
+			time := strconv.FormatInt(time.Now().UnixNano(), 10) //当前时间
+			err := p.Pubilsh("fff", []byte(time), 0)
+			//sendTime, err := strconv.Atoi(string(time))
+			//myLogger.Logger.PrintDebug2("Pubilsh ", time)
+			//myLogger.Logger.PrintDebug2("Pubilsh sendTime ", sendTime)
+			if err != nil {
+				myLogger.Logger.Print(err)
+				//os.Exit(1)
+				continue
+			}
+			i++
+			//atomic.AddInt32(&sum, 1)
+		}
+
 	}
 }
 

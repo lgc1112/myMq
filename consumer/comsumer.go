@@ -458,10 +458,6 @@ func (c *Consumer) changeConsumerPartition(Partitions []*protocol.Partition, reb
 	return nil
 }
 
-//func (c *Consumer) waitCreateResponse() bool{
-//	return <- c.createTopicChan
-//}
-
 //订阅分区
 func (c *Consumer) subscribePartition(rebalanceId int32) error {
 	myLogger.Logger.Print("subscribePartition len:", len(c.partitions))

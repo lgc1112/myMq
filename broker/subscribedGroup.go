@@ -15,25 +15,20 @@ const MaxTryTime = 10                     //最多重试的时间
 const needReSend = false                  //是否需要重传
 const showQueueSize = false               //是否需要重传
 type subscribedGroup struct {
-	name          string
-	partitionName string
-	rebalanceId   int32
-	wg            sync.WaitGroup
-	//consumerClientLock sync.RWMutex
+	name           string
+	partitionName  string
+	rebalanceId    int32
+	wg             sync.WaitGroup
 	consumerClient *client //限制在IOloop进程中修改，不加锁
 	circleQueue    *circleQueue
-	//circleQueue2 *circleQueue //高优先级队列
-	priorityQueue *priorityQueue //高优先级队列
-	inflightQueue *circleQueue   //循环队列，保存优先级队列中未ack的数据
+	priorityQueue  *priorityQueue //高优先级队列
+	inflightQueue  *circleQueue   //循环队列，保存优先级队列中未ack的数据
 
-	//inFlightMsgMap map[int32]*list.Element
-
-	readChan          chan *protocol.InternalMessage
-	preparedMsgChan   chan *protocol.InternalMessage
-	clientChangeChan  chan *clientChange
-	readLoopExitChan  chan string
-	writeLoopExitChan chan string
-	//exitFinishedChan chan string
+	readChan           chan *protocol.InternalMessage
+	preparedMsgChan    chan *protocol.InternalMessage
+	clientChangeChan   chan *clientChange
+	readLoopExitChan   chan string
+	writeLoopExitChan  chan string
 	msgAskChan         chan int32
 	priorityMsgAskChan chan int32
 	diskQueue1         *diskQueue //堆积队列
@@ -51,15 +46,14 @@ func NewSubscribedGroup(name string, partitionName string, broker *Broker) *subs
 		priorityMsgAskChan: make(chan int32),
 		readLoopExitChan:   make(chan string),
 		writeLoopExitChan:  make(chan string),
-		//inFlightMsgMap:    make(map[int32]*list.Element),
-		circleQueue:   NewCircleQueue(broker.queueSize + 1),
-		priorityQueue: NewPriorityQueue(broker.queueSize + 1),
-		inflightQueue: NewCircleQueue(broker.queueSize + 1),
-		partitionName: partitionName,
-		name:          name,
-		diskQueue1:    NewDiskQueue("./" + broker.Id + "data/" + partitionName + "/" + name + "/"),
-		diskQueue2:    NewDiskQueue("./" + broker.Id + "data/" + partitionName + "/" + name + "2/"),
-		queueSize:     broker.queueSize,
+		circleQueue:        NewCircleQueue(broker.queueSize + 1),
+		priorityQueue:      NewPriorityQueue(broker.queueSize + 1),
+		inflightQueue:      NewCircleQueue(broker.queueSize + 1),
+		partitionName:      partitionName,
+		name:               name,
+		diskQueue1:         NewDiskQueue("./" + broker.Id + "data/" + partitionName + "/" + name + "/"),
+		diskQueue2:         NewDiskQueue("./" + broker.Id + "data/" + partitionName + "/" + name + "2/"),
+		queueSize:          broker.queueSize,
 	}
 	g.wg.Add(2)
 	go func() {
@@ -367,9 +361,6 @@ func (g *subscribedGroup) readLoop() {
 			if diskReadyData != nil {
 				g.circleQueue.Push(diskReadyData)
 			}
-			//if memReadyData != nil{ //
-			//	g.circleQueue.Push(memReadyData) //保证队列满存储也不出问题
-			//}
 			goto exit
 		case bytes := <-diskReadyChan: //1有磁盘数据可读
 			if diskReadyData != nil {
@@ -435,8 +426,6 @@ func (g *subscribedGroup) readLoop() {
 				break
 			}
 		case <-showQueueChan: //时间到，检测是否需要重传消息
-			//myLogger.Logger.PrintfDebug("partitionName: %s circleQueue SentDataLen: %d  circleQueue Len: %d  diskQueue size: %d ",
-			//	g.partitionName,g.circleQueue.SentDataLen(), g.circleQueue.Len(), g.diskQueue1.msgNum)
 			myLogger.Logger.PrintfDebug("分区名: %s  内存队列大小: %d",
 				g.partitionName, g.circleQueue.Len())
 		}

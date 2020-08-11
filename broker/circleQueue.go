@@ -6,19 +6,19 @@ import (
 )
 
 type circleQueue struct {
-	capacity int    //最后元素
-	curSize int
+	capacity    int //最后元素
+	curSize     int
 	curSentSize int
-	array   []*protocol.InternalMessage //数组
-	head    int    //指向队列队首
-	tail    int    //指向队尾
-	sentIdx int //指向发送位置
+	array       []*protocol.InternalMessage //数组
+	head        int                         //指向队列队首
+	tail        int                         //指向队尾
+	sentIdx     int                         //指向发送位置
 }
 
-func NewCircleQueue(capacity int) *circleQueue{
+func NewCircleQueue(capacity int) *circleQueue {
 	cq := &circleQueue{
 		capacity: capacity,
-		array: make([]*protocol.InternalMessage, capacity),
+		array:    make([]*protocol.InternalMessage, capacity),
 	}
 	return cq
 }
@@ -77,6 +77,7 @@ func (c *circleQueue) Pop() (val *protocol.InternalMessage, err error) {
 
 	//head是指向队首，且包含队首元素
 	val = c.array[c.head]
+	c.array[c.head] = nil //回收内存
 	c.head = (c.head + 1) % c.capacity
 	return val, nil
 }
