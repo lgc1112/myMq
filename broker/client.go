@@ -118,20 +118,19 @@ func (c *client) clientExit() {
 		}
 	}
 
-	c.broker.partitionMapLock.RLock()
-	//从partition中删除
-	for partitionName, _ := range c.consumePartions { //delete from partition
-		partition, ok := c.broker.getPartition(&partitionName)
-		if !ok {
-			myLogger.Logger.Print("exit partition do not exist ：", partition.name)
-		} else {
-			myLogger.Logger.Print("exit partition : ", partition.name)
-			partition.invalidComsummerClient(c, c.belongGroup)
-		}
-	}
-	c.broker.partitionMapLock.RUnlock()
-
 	if !c.isbrokerExit { //如果是broker退出了说明conn已经关闭了
+		c.broker.partitionMapLock.RLock()
+		//从partition中删除
+		for partitionName, _ := range c.consumePartions { //delete from partition
+			partition, ok := c.broker.getPartition(&partitionName)
+			if !ok {
+				myLogger.Logger.Print("exit partition do not exist ：", partition.name)
+			} else {
+				myLogger.Logger.Print("exit partition : ", partition.name)
+				partition.invalidComsummerClient(c, c.belongGroup)
+			}
+		}
+		c.broker.partitionMapLock.RUnlock()
 		c.conn.Close()
 	}
 	close(c.writeMsgChan)
@@ -307,6 +306,9 @@ func (c *client) readLoop() {
 				myLogger.Logger.PrintError("Unmarshal error %s", err)
 				continue
 			} else {
+				//myLogger.Logger.PrintfDebug2("Partition %s receive data: %s  priority: %d", publishReq.PartitionName, publishReq.Msg.Msg, publishReq.Msg.Priority)
+
+				myLogger.Logger.PrintfDebug2("收到消息内容：%s   消息优先级：%d   发往分区：%s", publishReq.Msg.Msg, publishReq.Msg.Priority, publishReq.PartitionName)
 				myLogger.Logger.Printf("receive PublishReq: %s", publishReq)
 			}
 			response = c.publish(publishReq.PartitionName, publishReq.Msg)
@@ -340,7 +342,7 @@ func (c *client) readLoop() {
 			} else {
 				myLogger.Logger.Printf("receive PushMsgRsp: %s", rsp)
 			}
-			response = c.consumeSuccess(rsp.PartitionName, rsp.GroupName, rsp.MsgId)
+			response = c.consumeSuccess(rsp.PartitionName, rsp.GroupName, rsp.MsgId, rsp.MsgPriority)
 		default:
 			myLogger.Logger.Print("cannot find key")
 			//c.broker.readChan <- &readData{c.id, client2ServerData}//对于其它类型的消息，大多是修改或获取集群拓扑结构等，统一交给broker处理，减少锁的使用
@@ -353,7 +355,7 @@ func (c *client) readLoop() {
 }
 
 //处理消费成功的commit
-func (c *client) consumeSuccess(partitionName string, groupName string, msgId int32) (response []byte) {
+func (c *client) consumeSuccess(partitionName string, groupName string, msgId int32, priority int32) (response []byte) {
 	//c.broker.partitionMapLock.RLock()
 	//defer c.broker.partitionMapLock.RUnlock()
 	//
@@ -364,9 +366,14 @@ func (c *client) consumeSuccess(partitionName string, groupName string, msgId in
 		myLogger.Logger.Printf("consume Partition Not existed : %s", partitionName)
 		return nil
 	} else {
+		isPriorityMsg := false
+		if priority >= 0 {
+			isPriorityMsg = true
+		}
 		msgAskData := &msgAskData{
-			msgId:     msgId,
-			groupName: groupName,
+			msgId:         msgId,
+			groupName:     groupName,
+			isPriorityMsg: isPriorityMsg,
 		}
 		partition.msgAskChan <- msgAskData
 		return nil

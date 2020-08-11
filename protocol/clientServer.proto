@@ -163,7 +163,8 @@ message PushMsgRsp{
   RetStatus ret = 1;
   string PartitionName = 2;
   int32 MsgId = 3;
-  string GroupName = 4;
+  int32 MsgPriority = 4;
+  string GroupName = 5;
 }
 
 message PublishWithoutAskReq{

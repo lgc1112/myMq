@@ -343,6 +343,8 @@ func (c *Consumer) ReadLoop(handler Handler, exitChan <-chan bool) {
 				} else {
 					myLogger.Logger.Printf("receive PushMsgReq: %s", req)
 				}
+				//myLogger.Logger.PrintfDebug2("Consumer receive data: %s  priority: %d from partition: %s", req.Msg.Msg, req.Msg.Priority, req.PartitionName)
+				myLogger.Logger.PrintfDebug2("消费消息内容：%s   消息优先级：%d   来自分区：%s", req.Msg.Msg, req.Msg.Priority, req.PartitionName)
 				if handler == nil { //为空则使用默认处理
 					c.processMsg(req.Msg)
 				} else { //否则使用传入参数处理
@@ -353,29 +355,16 @@ func (c *Consumer) ReadLoop(handler Handler, exitChan <-chan bool) {
 					PartitionName: req.PartitionName,
 					GroupName:     req.GroupName,
 					MsgId:         req.Msg.Id,
+					MsgPriority:   req.Msg.Priority,
 				}
-				//data, err := proto.Marshal(rsp)
-				//if err != nil {
-				//	myLogger.Logger.PrintError("marshaling error", err)
-				//	break
-				//}
-				//reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
-				//if err != nil {
-				//	myLogger.Logger.PrintError("marshaling error", err)
-				//	break
-				//}
-				//myLogger.Logger.Printf("write: %s", rsp)
-				//response = reqData
 				conn, ok := c.getBrokerConnAndLock(&data.connAddr)
 				if ok {
 					myLogger.Logger.Print("write response", rsp)
-					conn.writeMsgChan <- rsp
-					//err := conn.PutMsg(rsp)
-					//if err != nil {
-					//	myLogger.Logger.PrintError("PutMsg error %s", err)
-					//	c.getBrokerConnUnLock()
-					//	continue
-					//}
+					if rsp.MsgPriority > 0 {
+						conn.writePriorityMsgAckChan <- rsp
+					} else {
+						conn.writeMsgAckChan <- rsp
+					}
 					myLogger.Logger.Print("write response end")
 				} else {
 					myLogger.Logger.Print("conn cannot find", data.connAddr)
@@ -518,6 +507,83 @@ func (c *Consumer) subscribePartition(rebalanceId int32) error {
 	}
 	return nil
 
+}
+
+//获消费者的分区
+func (c *Consumer) getConsumePartition() error {
+	if c.controllerConn == nil {
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return errors.New("controllerConn Not exist")
+	}
+
+	requestData := &protocol.GetConsumerPartitionReq{
+		GroupName: c.groupName,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdGetConsumerPartitionReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+
+	c.controllerConn.Put(reqData)
+	myLogger.Logger.Printf("getConsumePartition %s", requestData)
+	return nil
+}
+
+//向controller注册消费者
+func (c *Consumer) registerConsumer() error {
+	if c.controllerConn == nil {
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return nil
+	}
+
+	requestData := &protocol.RegisterConsumerReq{
+		GroupName: c.groupName,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdUnRegisterConsumerReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+
+	c.controllerConn.Put(reqData)
+	myLogger.Logger.Printf("registerConsumer %s", requestData)
+	return nil
+}
+
+func (c *Consumer) unRegisterConsumer() error {
+	if c.controllerConn == nil {
+		myLogger.Logger.PrintError("controllerConn Not exist")
+		return nil
+	}
+
+	requestData := &protocol.UnRegisterConsumerReq{
+		GroupName: c.groupName,
+	}
+	data, err := proto.Marshal(requestData)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+	reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdUnRegisterConsumerReq, data)
+	if err != nil {
+		myLogger.Logger.PrintError("marshaling error", err)
+		return err
+	}
+
+	c.controllerConn.Put(reqData)
+	myLogger.Logger.Printf("registerConsumer %s", requestData)
+	return nil
 }
 
 //func (c *Consumer) subscribePartion(rebalanceId int32) error{

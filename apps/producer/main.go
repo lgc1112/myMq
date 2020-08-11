@@ -35,20 +35,19 @@ func main() {
 	reCreateTopic = *rC
 	msgLen = *mL
 
-	fmt.Println("producerNum:", producerNum, " partitionNum:", partitionNum, " reCreateTopic", reCreateTopic, " msgLen:", msgLen)
-
 	host, port, _ := net.SplitHostPort(*brokerAddr)
 	if host == "0.0.0.0" { //转换为本地ip
 		*brokerAddr = getIntranetIp() + ":" + port //真实ip
 	}
 
 	brokerAddrs := []string{*brokerAddr}
-	stressTest(brokerAddrs)
-	//NormalTest(brokerAddrs)
+	//stressTest(brokerAddrs)
+	NormalTest(brokerAddrs)
 }
 
 //压力测试代码
 func stressTest(addr []string) {
+	fmt.Println("producerNum:", producerNum, " partitionNum:", partitionNum, " reCreateTopic", reCreateTopic, " msgLen:", msgLen)
 	var wg sync.WaitGroup
 	exitChan := make(chan bool)
 	sendMsg := generateString(msgLen)
@@ -103,6 +102,7 @@ exit:
 }
 
 func NormalTest(addr []string) {
+	fmt.Println("producerNum:", producerNum, " partitionNum:", partitionNum, " reCreateTopic", reCreateTopic)
 	var wg sync.WaitGroup
 	exitChan := make(chan bool)
 	for i := 0; i < producerNum; i++ {
@@ -175,16 +175,15 @@ func producerHandleSync(p *producer.Producer, exitChan <-chan bool) {
 				return
 			}
 		default:
-			s := fmt.Sprintf("Msg : %d, Priotity : i", i)
-			i++
+			s := fmt.Sprintf("消息%d", i)
 			time.Sleep(1000 * time.Millisecond)
 			err := p.Pubilsh("fff", []byte(s), i)
 			if err != nil {
 				myLogger.Logger.Print(err)
 				//os.Exit(1)
-				i--
 				continue
 			}
+			i++
 			//atomic.AddInt32(&sum, 1)
 		}
 	}

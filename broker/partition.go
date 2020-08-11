@@ -35,8 +35,9 @@ const (
 )
 
 type msgAskData struct {
-	msgId     int32
-	groupName string
+	msgId         int32
+	groupName     string
+	isPriorityMsg bool
 }
 
 func newPartition(name string, addr string, isNativePartiton bool, broker *Broker, belongtopic string) *partition {
@@ -57,6 +58,7 @@ func newPartition(name string, addr string, isNativePartiton bool, broker *Broke
 		name:              name,
 		addr:              addr,
 		broker:            broker,
+		queueSize:         broker.queueSize,
 		isNativePartition: isNativePartiton,
 		msgChan:           make(chan *protocol.Message, msgChanSize),
 		responseChan:      make(chan []byte),
@@ -115,7 +117,11 @@ func (p *partition) readLoop() {
 			if !ok {
 				myLogger.Logger.Print("msgAskData group not exist :", msgAskData.groupName)
 			}
-			subscribedGroup.msgAskChan <- msgAskData.msgId
+			if msgAskData.isPriorityMsg {
+				subscribedGroup.priorityMsgAskChan <- msgAskData.msgId
+			} else {
+				subscribedGroup.msgAskChan <- msgAskData.msgId
+			}
 			p.subscribedGroupsLock.RUnlock()
 		case msg = <-p.msgChan:
 			nextId := p.generateMsgId()
@@ -129,7 +135,7 @@ func (p *partition) readLoop() {
 			if msg.Priority > 0 { //这是优先级消息，需先判断消息是否可保存的优先队列
 				for grpName, subGrp := range p.subscribedGroups {
 					if subGrp.priorityQueue.Len() > p.queueSize-2 { //写不下了，需拒绝这条消息
-						myLogger.Logger.Printf("group %s is full", grpName)
+						myLogger.Logger.Printf("group %s is full %d  %d", grpName, subGrp.priorityQueue.Len(), p.broker.queueSize)
 						rsp := &protocol.PushMsgRsp{
 							Ret: protocol.RetStatus_QueueFull,
 						}

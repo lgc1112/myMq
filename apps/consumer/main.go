@@ -17,9 +17,9 @@ import "../../consumer"
 var sum int32
 
 const testTime = 20000 * time.Second //测试时间
-var consumerNum = 10
-var partitionNum = 10
-var reCreateTopic = true //是否需要重建topic
+var consumerNum = 1                  //消费者数
+var partitionNum = 6                 //生产者数
+var reCreateTopic = true             //是否需要重建topic true  false
 func main() {
 	fmt.Println("consumer start")
 
@@ -41,43 +41,56 @@ func main() {
 		*brokerAddr = getIntranetIp() + ":" + port //真实ip
 	}
 
-	StressTest(brokerAddr)
-}
-
-type myHandle struct {
-	id          int
-	receivedNum int64
+	//StressTest(brokerAddr)
+	NormalTest(brokerAddr)
 }
 
 func NormalTest(addr *string) {
 	brokerAddrs := []string{*addr}
 	var wg sync.WaitGroup
+	exitChan := make(chan bool)
+
 	for i := 0; i < consumerNum; i++ {
 		consumer, err := consumer.NewConsumer(brokerAddrs, "group0")
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+		//myHandle := myHandle2{i}
+		wg.Add(1)
+		go func() {
+			consumer.ReadLoop(nil, exitChan) //处理接收消息
+			wg.Done()
+		}()
+		myLogger.Logger.Print("NewConsumer:", i)
 		if i == 0 && reCreateTopic {
 			consumer.DeleteTopic("fff") //先删除原来的分区
-			//time.Sleep(1000 * time.Millisecond)
 			consumer.CreatTopic("fff", int32(partitionNum))
-			//time.Sleep(3000 * time.Millisecond)
 		}
 		err = consumer.SubscribeTopic("fff")
 		if err != nil {
 			myLogger.Logger.Print(err)
 			os.Exit(1)
 		}
-		myHandle := myHandle{i, 0}
-		wg.Add(1)
-		go consumer.ReadLoop(myHandle, nil) //处理接收消息
-		//time.Sleep(100 * time.Millisecond)
-		myLogger.Logger.PrintDebug("NewConsumer:", i)
 	}
-	myLogger.Logger.PrintDebug("NewConsumer finished:")
-	wg.Wait()
+
+	exitSignal := make(chan os.Signal)
+	signal.Notify(exitSignal, os.Interrupt, os.Kill) //监听信号
+
+	s := <-exitSignal //退出信号来了
+	myLogger.Logger.Print("exitSignal:", s)
+	close(exitChan) //关闭退出管道，通知所有协程退出
+	wg.Wait()       //等待退出
+	myLogger.Logger.Print("NewConsumer finished:")
 }
+
+//type myHandle2 struct {
+//	id int
+//}
+//
+//func (h myHandle2) ProcessMsg(msg *protocol.Message) {
+//	myLogger.Logger.PrintfDebug2("Consumer receive data: %s  priority: %d",msg. msg.Msg, msg.Priority)
+//}
 
 //压力测试
 func StressTest(addr *string) {
@@ -139,6 +152,11 @@ exit:
 	wg.Wait()
 }
 
+type myHandle struct {
+	id          int
+	receivedNum int64
+}
+
 func (h myHandle) ProcessMsg(msg *protocol.Message) {
 	atomic.AddInt32(&sum, 1)
 	myLogger.Logger.Printf("Consumer %d receive data is %s:", h.id, string(msg.Msg))
@@ -161,3 +179,33 @@ func getIntranetIp() string {
 	}
 	return "0.0.0.0"
 }
+
+//func NormalTest(addr *string) {
+//	brokerAddrs := []string{*addr}
+//	var wg sync.WaitGroup
+//	for i := 0; i < consumerNum; i++ {
+//		consumer, err := consumer.NewConsumer(brokerAddrs, "group0")
+//		if err != nil {
+//			fmt.Println(err)
+//			os.Exit(1)
+//		}
+//		if i == 0 && reCreateTopic {
+//			consumer.DeleteTopic("fff") //先删除原来的分区
+//			//time.Sleep(1000 * time.Millisecond)
+//			consumer.CreatTopic("fff", int32(partitionNum))
+//			//time.Sleep(3000 * time.Millisecond)
+//		}
+//		err = consumer.SubscribeTopic("fff")
+//		if err != nil {
+//			myLogger.Logger.Print(err)
+//			os.Exit(1)
+//		}
+//		myHandle := myHandle{i, 0}
+//		wg.Add(1)
+//		go consumer.ReadLoop(myHandle, nil) //处理接收消息
+//		//time.Sleep(100 * time.Millisecond)
+//		myLogger.Logger.PrintDebug("NewConsumer:", i)
+//	}
+//	myLogger.Logger.PrintDebug("NewConsumer finished:")
+//	wg.Wait()
+//}

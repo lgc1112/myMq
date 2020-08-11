@@ -1,6 +1,5 @@
 package etcdClient
 
-
 import (
 	"../../protocol"
 	"../myLogger"
@@ -14,20 +13,19 @@ import (
 
 const topicAddrKey string = "/topic"
 
-
 //监听回调接口
 type ClientEtcdListener interface {
 	ControllerAddrChange(*protocol.ListenAddr)
 	TopicChange(topic string, partition *protocol.Partitions)
 }
 
-type ClientEtcdClient struct{
+type ClientEtcdClient struct {
 	handle ClientEtcdListener
 	client *clientv3.Client
 }
 
 //客户端的etcd连接
-func NewClientEtcdClient(clientListener ClientEtcdListener, etcdAddr *string) (*ClientEtcdClient, error){
+func NewClientEtcdClient(clientListener ClientEtcdListener, etcdAddr *string) (*ClientEtcdClient, error) {
 	client, err := clientv3.New(clientv3.Config{Endpoints: []string{*etcdAddr}, DialTimeout: 5 * time.Second})
 	if err != nil {
 		myLogger.Logger.Print(err)
@@ -42,7 +40,7 @@ func NewClientEtcdClient(clientListener ClientEtcdListener, etcdAddr *string) (*
 }
 
 //获取当前controller的地址
-func (c *ClientEtcdClient)GetControllerAddr()  (*protocol.ListenAddr, error){
+func (c *ClientEtcdClient) GetControllerAddr() (*protocol.ListenAddr, error) {
 	var getResp *clientv3.GetResponse
 	var err error
 	if getResp, err = c.client.Get(context.TODO(), controllerAddrKey); err != nil {
@@ -62,8 +60,8 @@ func (c *ClientEtcdClient)GetControllerAddr()  (*protocol.ListenAddr, error){
 	return listenAddr, nil
 }
 
-//监听controller或topic修改协程
-func (c *ClientEtcdClient)watcher()  {
+//监听controller或topic 修改的协程
+func (c *ClientEtcdClient) watcher() {
 
 	watcher := clientv3.NewWatcher(c.client)
 
@@ -73,9 +71,9 @@ func (c *ClientEtcdClient)watcher()  {
 	//watcher.Watch(ctx, controllerAddrKey)
 	topicWatchCh := watcher.Watch(context.Background(), topicAddrKey, clientv3.WithPrefix())
 	myLogger.Logger.Print("startWatch...")
-	for{
+	for {
 		select {
-		case watchResp := <- topicWatchCh:  //topic发生改变
+		case watchResp := <-topicWatchCh: //topic发生改变
 			for _, event := range watchResp.Events {
 				switch event.Type {
 				case mvccpb.PUT:
@@ -86,7 +84,7 @@ func (c *ClientEtcdClient)watcher()  {
 						myLogger.Logger.PrintError(err)
 						continue
 					}
-					l3:=strings.Count(topicAddrKey,"")
+					l3 := strings.Count(topicAddrKey, "")
 					c.handle.TopicChange(string(event.Kv.Key[l3:]), partitions)
 				case mvccpb.DELETE:
 					myLogger.Logger.Print("删除了", "Revision:", event.Kv.ModRevision)
@@ -117,4 +115,3 @@ func (c *ClientEtcdClient)watcher()  {
 	}
 	myLogger.Logger.Print("bye")
 }
-

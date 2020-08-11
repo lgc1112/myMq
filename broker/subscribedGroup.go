@@ -5,7 +5,6 @@ import (
 	"../mylib/protocalFuc"
 	"../protocol"
 	"container/heap"
-	"container/list"
 	"github.com/golang/protobuf/proto"
 	"sync"
 	"time"
@@ -14,7 +13,7 @@ import (
 const retryTime = 1000 * time.Millisecond //队列重试时间
 const MaxTryTime = 10                     //最多重试的时间
 const needReSend = false                  //是否需要重传
-const showQueueSize = true                //是否需要重传
+const showQueueSize = false               //是否需要重传
 type subscribedGroup struct {
 	name          string
 	partitionName string
@@ -25,9 +24,9 @@ type subscribedGroup struct {
 	circleQueue    *circleQueue
 	//circleQueue2 *circleQueue //高优先级队列
 	priorityQueue *priorityQueue //高优先级队列
-	//inflightQueue *list.List //链表
+	inflightQueue *circleQueue   //循环队列，保存优先级队列中未ack的数据
 
-	inFlightMsgMap map[int32]*list.Element
+	//inFlightMsgMap map[int32]*list.Element
 
 	readChan          chan *protocol.InternalMessage
 	preparedMsgChan   chan *protocol.InternalMessage
@@ -35,25 +34,27 @@ type subscribedGroup struct {
 	readLoopExitChan  chan string
 	writeLoopExitChan chan string
 	//exitFinishedChan chan string
-	msgAskChan chan int32
-	diskQueue1 *diskQueue //堆积队列
-	diskQueue2 *diskQueue //持久化及恢复队列
-	queueSize  int
+	msgAskChan         chan int32
+	priorityMsgAskChan chan int32
+	diskQueue1         *diskQueue //堆积队列
+	diskQueue2         *diskQueue //持久化及恢复队列
+	queueSize          int
 }
 
 func NewSubscribedGroup(name string, partitionName string, broker *Broker) *subscribedGroup {
 	myLogger.Logger.Printf("newPartionGroup %s %s ", name, partitionName)
 	g := &subscribedGroup{
-		readChan:          make(chan *protocol.InternalMessage),
-		preparedMsgChan:   make(chan *protocol.InternalMessage),
-		clientChangeChan:  make(chan *clientChange),
-		msgAskChan:        make(chan int32),
-		readLoopExitChan:  make(chan string),
-		writeLoopExitChan: make(chan string),
-		inFlightMsgMap:    make(map[int32]*list.Element),
-		circleQueue:       NewCircleQueue(broker.queueSize + 1),
-		priorityQueue:     NewPriorityQueue(broker.queueSize + 1),
-		//inflightQueue: list.New(),
+		readChan:           make(chan *protocol.InternalMessage),
+		preparedMsgChan:    make(chan *protocol.InternalMessage),
+		clientChangeChan:   make(chan *clientChange),
+		msgAskChan:         make(chan int32),
+		priorityMsgAskChan: make(chan int32),
+		readLoopExitChan:   make(chan string),
+		writeLoopExitChan:  make(chan string),
+		//inFlightMsgMap:    make(map[int32]*list.Element),
+		circleQueue:   NewCircleQueue(broker.queueSize + 1),
+		priorityQueue: NewPriorityQueue(broker.queueSize + 1),
+		inflightQueue: NewCircleQueue(broker.queueSize + 1),
 		partitionName: partitionName,
 		name:          name,
 		diskQueue1:    NewDiskQueue("./" + broker.Id + "data/" + partitionName + "/" + name + "/"),
@@ -80,6 +81,26 @@ func (g *subscribedGroup) exit() {
 	g.wg.Wait() //等待两个loop退出
 
 	g.diskQueue2.StopRead() //该停止读数据了
+
+	for g.inflightQueue.Len() > 0 { //把inflightQueue队列的数据全部存入磁盘
+		if g.priorityQueue.Len() < g.queueSize {
+			myLogger.Logger.Print("read Data from inflightQueue")
+			circleQueue2Data, _ := g.inflightQueue.Pop()
+			g.priorityQueue.Push(circleQueue2Data)
+		} else {
+			myLogger.Logger.Print("read Data from inflightQueue")
+			circleQueue2Data, _ := g.inflightQueue.Pop()
+			data, err := proto.Marshal(circleQueue2Data)
+			if err != nil {
+				myLogger.Logger.PrintError("Marshal :", err)
+			}
+			err = g.diskQueue2.StoreData(data)
+			if err != nil {
+				myLogger.Logger.PrintError("storeData :", err)
+			}
+			myLogger.Logger.Printf("push Msg %s to diskQueue, present Len: %d", circleQueue2Data, g.diskQueue2.msgNum)
+		}
+	}
 
 	for g.priorityQueue.Len() > 0 { //把优先级队列的数据全部存入磁盘
 		myLogger.Logger.Print("read Data from priorityQueue")
@@ -155,6 +176,7 @@ func (g *subscribedGroup) writeLoop() {
 					preparedMsgChan = nil
 					curConsumerChan = consumerChan
 				}
+				//g.circleQueue.ResetSendData() //将发送位移重置为队首元素
 				myLogger.Logger.Print("add group Client success")
 			} else { //删除client
 				if g.consumerClient != nil { // && g.consumerClient.id == tmp.client.id id不等的话是因为已被替换了,不用处理
@@ -253,17 +275,28 @@ func (g *subscribedGroup) readLoop() {
 			}
 		}
 
-		//负责读disk2中的消息到circleQueue2
+		//负责读disk2中的消息到circleQueue或priorityQueue
 		if diskReadyData2 == nil { //准备好的数据为空
 			diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读数据
 		} else { //磁盘数据准备好了
-			if g.circleQueue.Len() < g.queueSize { //放到内存队列
-				g.circleQueue.Push(diskReadyData2) //放到队列末尾
-				myLogger.Logger.Printf("push Msg %s to circleQueue, present queueLen: %d present dataLen:", diskReadyData, g.circleQueue.Len(), g.circleQueue.SentDataLen())
-				diskReadyData2 = nil                    //清空
-				diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读新数据
+			if diskReadyData2.Priority == 0 { //优先级为0的数据
+				if g.circleQueue.Len() < g.queueSize { //放到内存队列
+					g.circleQueue.Push(diskReadyData2) //放到队列末尾
+					myLogger.Logger.Printf("push Msg %s to circleQueue, present queueLen: %d present dataLen:", diskReadyData, g.circleQueue.Len(), g.circleQueue.SentDataLen())
+					diskReadyData2 = nil                    //清空
+					diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读新数据
+				} else {
+					diskReadyChan2 = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
+				}
 			} else {
-				diskReadyChan2 = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
+				if g.priorityQueue.Len() < g.queueSize { //放到内存队列
+					g.priorityQueue.Push(diskReadyData2) //放到队列末尾
+					myLogger.Logger.Printf("push Msg %s to priorityQueue, present queueLen: %d:", diskReadyData, g.priorityQueue.Len())
+					diskReadyData2 = nil                    //清空
+					diskReadyChan2 = g.diskQueue2.readyChan //可从磁盘读新数据
+				} else {
+					diskReadyChan2 = nil //读出的数据未处理，不可从磁盘读数据,使其阻塞
+				}
 			}
 		}
 
@@ -271,6 +304,10 @@ func (g *subscribedGroup) readLoop() {
 		if memReadyData == nil && g.priorityQueue.Len() > 0 { //优先队列中有数据必须先发完优先队列中的
 			myLogger.Logger.Print("read Data from priorityQueue")
 			memReadyData = heap.Pop(g.priorityQueue).(*protocol.InternalMessage)
+			if needReSend {
+				memReadyData.Timeout = time.Now().Add(retryTime).UnixNano() //设置超时时间
+			}
+			g.inflightQueue.Push(memReadyData) //保存到inflight队列
 			//memReadyData, _ = g.circleQueue2.Pop()
 		} else if memReadyData == nil && g.circleQueue.SentDataLen() > 0 { //只有优先队列中没有数据，才往这里读数据
 			myLogger.Logger.Print("read Data from circleQueue1 remain Len：", g.circleQueue.SentDataLen())
@@ -287,7 +324,7 @@ func (g *subscribedGroup) readLoop() {
 		}
 
 		select {
-		case askId := <-g.msgAskChan:
+		case askId := <-g.msgAskChan: //普通消息ack
 			myLogger.Logger.Print("receive delete ask: ", askId)
 			//err := g.popInflightMsg(askId)
 			for {
@@ -302,6 +339,26 @@ func (g *subscribedGroup) readLoop() {
 					g.circleQueue.Pop() //该数据已被消费了，出队
 					break
 				} else {
+					myLogger.Logger.PrintWarning("delete ask can not find", askId)
+					break
+				}
+			}
+		case askId := <-g.priorityMsgAskChan: //优先级消息ack
+			myLogger.Logger.Printf("receive priorityM delete ask: %d len %d", askId, g.inflightQueue.Len())
+			//err := g.popInflightMsg(askId)
+			for {
+				msg, err := g.inflightQueue.Peek()
+				if err != nil {
+					myLogger.Logger.Print(err)
+					break
+				}
+				if askId != msg.Id {
+					g.inflightQueue.Pop() //该数据已被消费了，出队
+				} else if askId == msg.Id {
+					g.inflightQueue.Pop() //该数据已被消费了，出队
+					break
+				} else {
+					myLogger.Logger.PrintWarning("delete ask can not find", askId)
 					break
 				}
 			}
@@ -394,6 +451,38 @@ exit:
 		showQueueTicker.Stop()
 	}
 }
+
+//func (g *subscribedGroup) pushInflightMsg(msg *protocol.InternalMessage) error{
+//	msg.Timeout = time.Now().Add(retryTime).UnixNano() //设置超时时间
+//	err := g.inflightQueue.Push(msg) //插入队列后面
+//	if err != nil{
+//		return err
+//	}
+//	myLogger.Logger.Printf("pushInflightMsg: %d  remain len: %d", msg.Id, g.inflightQueue.Len())
+//
+//	//heap.Push(g.inflightQueue, msg)
+//	return nil
+//}
+
+//func (g *subscribedGroup) popInflightMsg(msgId int32) error{
+//	for{
+//		g.inflightQueue.
+//		if !ok {
+//			myLogger.Logger.Print("popInflightMsg not exist", msgId)
+//			if
+//		}
+//		break
+//	}
+//	e, ok := g.inFlightMsgMap[msgId]
+//	if !ok {
+//		return errors.New("popInflightMsg not exist")
+//	}
+//	g.inflightQueue.Remove(e)
+//	myLogger.Logger.Printf("popInflightMsg:  %d  remain len: %d:", msgId, g.inflightQueue.Len())
+//	//heap.Remove(g.inflightQueue, int(msg.Pos))
+//	delete(g.inFlightMsgMap, msgId)
+//	return nil
+//}
 
 //func (g *subscribedGroup) readLoop()  {
 //	var msg *protocol.Message

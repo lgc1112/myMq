@@ -17,7 +17,7 @@ const defaultEtcdAddr string = "9.135.8.253:2379" //etcd服务器地址
 const numVirtualNodes int = 3                     //一直性哈希的虚拟节点数
 type Producer struct {
 	addrs             []string      //broker的地址，不使用集群模式时需要传入
-	controllerConn    *producerConn //保存到master的连接
+	controllerConn    *producerConn //保存到controller的连接
 	partitionMapLock  sync.RWMutex
 	partitionMap      map[string][]*protocol.Partition //topic名 映射到 protocol.Partition
 	sendIdx           int
@@ -25,7 +25,7 @@ type Producer struct {
 	brokerConnMapLock sync.RWMutex
 	brokerConnMap     map[string]*producerConn //broker ip 映射到 producerConn
 	pubishAsk         chan string
-	etcdClient        *etcdClient.ClientEtcdClient
+	etcdClient        *etcdClient.ClientEtcdClient //保存到etcd的连接
 	consistenceHash   map[string]*consistenthash.ConsistenceHash
 }
 
@@ -439,7 +439,8 @@ func (p *Producer) PubilshSync(partition *protocol.Partition, msg *protocol.Mess
 		return err
 	}
 	myLogger.Logger.Printf("Pubilsh %s", requestData)
-	myLogger.Logger.PrintfDebug2("Pubilsh %s", requestData)
+	myLogger.Logger.PrintfDebug2("发布消息内容：%s   消息优先级：%d   目的分区 %s", requestData.Msg.Msg, requestData.Msg.Priority, requestData.PartitionName)
+	//myLogger.Logger.PrintfDebug2("Pubilsh %s", requestData)
 
 	cmd, msgBody, err := brokerConn.readResponse()
 	if err != nil {

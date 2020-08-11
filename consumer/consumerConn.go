@@ -21,10 +21,11 @@ type consumerConn struct {
 	conn     net.Conn
 	reader   *bufio.Reader
 	//writerLock sync.RWMutex
-	writer       *bufio.Writer
-	writeMsgChan chan *protocol.PushMsgRsp
-	writeChan    chan []byte
-	exitChan     chan string
+	writer                  *bufio.Writer
+	writeMsgAckChan         chan *protocol.PushMsgRsp
+	writePriorityMsgAckChan chan *protocol.PushMsgRsp
+	writeChan               chan []byte
+	exitChan                chan string
 }
 
 func NewConn(addr string, consumer *Consumer) (*consumerConn, error) {
@@ -33,14 +34,15 @@ func NewConn(addr string, consumer *Consumer) (*consumerConn, error) {
 		return nil, err
 	}
 	c := &consumerConn{
-		addr:         addr,
-		conn:         conn,
-		reader:       bufio.NewReader(conn),
-		writer:       bufio.NewWriter(conn),
-		writeChan:    make(chan []byte),
-		exitChan:     make(chan string),
-		writeMsgChan: make(chan *protocol.PushMsgRsp),
-		consumer:     consumer,
+		addr:                    addr,
+		conn:                    conn,
+		reader:                  bufio.NewReader(conn),
+		writer:                  bufio.NewWriter(conn),
+		writeChan:               make(chan []byte),
+		exitChan:                make(chan string),
+		writeMsgAckChan:         make(chan *protocol.PushMsgRsp),
+		writePriorityMsgAckChan: make(chan *protocol.PushMsgRsp),
+		consumer:                consumer,
 	}
 
 	return c, nil
@@ -97,12 +99,17 @@ func (c *consumerConn) writeLoop() {
 	var maxMsgId int32
 	var lastPartitionName string
 	var lastGroupName string
-	var NeedCommit bool
+	var NeedCommitAck bool
+
+	var priorityLastMsgId int32
+	var priorityLastPartitionName string
+	var priorityLastGroupName string
+	var NeedCommitPriorityAck bool
 	for {
 		select {
 		case <-timeTicker.C:
-			if NeedCommit {
-				NeedCommit = false
+			if NeedCommitAck { //普通消息需要ack
+				NeedCommitAck = false
 				rsp := &protocol.PushMsgRsp{
 					Ret:           protocol.RetStatus_Successs,
 					PartitionName: lastPartitionName,
@@ -125,13 +132,38 @@ func (c *consumerConn) writeLoop() {
 				}
 				myLogger.Logger.Print("commit", rsp)
 			}
+			if NeedCommitPriorityAck { //优先级消息需要ack
+				NeedCommitPriorityAck = false
+				rsp := &protocol.PushMsgRsp{
+					Ret:           protocol.RetStatus_Successs,
+					PartitionName: priorityLastPartitionName,
+					GroupName:     priorityLastGroupName,
+					MsgId:         priorityLastMsgId,
+					MsgPriority:   1,
+				}
+				data, err := proto.Marshal(rsp)
+				if err != nil {
+					myLogger.Logger.PrintError("marshaling error", err)
+					break
+				}
+				reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
+				if err != nil {
+					myLogger.Logger.PrintError("marshaling error", err)
+					break
+				}
+				_, err = c.writer.Write(reqData)
+				if err != nil {
+					myLogger.Logger.PrintError("writeLoop1:", err)
+				}
+				myLogger.Logger.Print("commit", rsp)
+			}
 			err := c.writer.Flush()
 			if err != nil {
 				myLogger.Logger.PrintError("writeLoop1:", err)
 			}
-		case msg := <-c.writeMsgChan:
+		case msg := <-c.writeMsgAckChan: //普通消息
 			if msg.PartitionName == lastPartitionName && msg.GroupName == lastGroupName { //分区及组名都没有改变，只需更新最大id
-				NeedCommit = true
+				NeedCommitAck = true
 				maxMsgId = msg.MsgId //先不ack，等一段时间再统一ack
 				myLogger.Logger.Print("defer commit ", msg)
 			} else { //改变了，需直接将上次的commit上传
@@ -141,7 +173,7 @@ func (c *consumerConn) writeLoop() {
 					maxMsgId = msg.MsgId
 					continue
 				}
-				NeedCommit = true
+				NeedCommitAck = true
 				rsp := &protocol.PushMsgRsp{
 					Ret:           protocol.RetStatus_Successs,
 					PartitionName: lastPartitionName,
@@ -168,6 +200,45 @@ func (c *consumerConn) writeLoop() {
 				}
 			}
 
+		case msg := <-c.writePriorityMsgAckChan: //优先级消息
+			if msg.PartitionName == priorityLastPartitionName && msg.GroupName == priorityLastGroupName { //分区及组名都没有改变，只需更最终Id
+				NeedCommitPriorityAck = true
+				priorityLastMsgId = msg.MsgId //先不ack，等一段时间再统一ack
+				myLogger.Logger.Print("defer commit Priority msg: ", msg)
+			} else { //改变了，需直接将上次的commit上传
+				if priorityLastPartitionName == "" {
+					priorityLastPartitionName = msg.PartitionName
+					priorityLastGroupName = msg.GroupName
+					priorityLastMsgId = msg.MsgId
+					continue
+				}
+				NeedCommitPriorityAck = true
+				rsp := &protocol.PushMsgRsp{
+					Ret:           protocol.RetStatus_Successs,
+					PartitionName: priorityLastPartitionName,
+					GroupName:     priorityLastGroupName,
+					MsgId:         priorityLastMsgId,
+					MsgPriority:   1,
+				}
+				priorityLastPartitionName = msg.PartitionName
+				priorityLastGroupName = msg.GroupName
+				priorityLastMsgId = msg.MsgId
+				myLogger.Logger.Print("commit Priority msg: rightnow")
+				data, err := proto.Marshal(rsp)
+				if err != nil {
+					myLogger.Logger.PrintError("marshaling error", err)
+					break
+				}
+				reqData, err := protocalFuc.PackClientServerProtoBuf(protocol.ClientServerCmd_CmdPushMsgRsp, data)
+				if err != nil {
+					myLogger.Logger.PrintError("marshaling error", err)
+					break
+				}
+				_, err = c.writer.Write(reqData)
+				if err != nil {
+					myLogger.Logger.PrintError("writeLoop1:", err)
+				}
+			}
 		case request := <-c.writeChan:
 			myLogger.Logger.Printf("writeLoop1: %s", request)
 			_, err := c.writer.Write(request)
@@ -208,7 +279,7 @@ func (c *consumerConn) Put(data []byte) error {
 func (c *consumerConn) PutMsg(msg *protocol.PushMsgRsp) error {
 
 	select {
-	case c.writeMsgChan <- msg:
+	case c.writeMsgAckChan <- msg:
 		//myLogger.Logger.Print("do not have client")
 	case <-time.After(3000 * time.Microsecond):
 		myLogger.Logger.PrintError("write fail")
