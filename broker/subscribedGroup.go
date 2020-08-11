@@ -390,7 +390,7 @@ func (g *subscribedGroup) readLoop() {
 		case msg = <-g.readChan: //新数据到了
 			msg.TryTimes++         //重试次数加一
 			if msg.Priority == 0 { //普通消息
-				if g.circleQueue.Len() < g.queueSize { // && g.diskQueue1.msgNum == 0，只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
+				if g.circleQueue.Len() < g.queueSize && g.diskQueue1.msgNum == 0 { // && g.diskQueue1.msgNum == 0，只有磁盘中的数据已经处理完了并且内存数据为0才可以存内存，保证顺序性
 					if needReSend {
 						msg.Timeout = time.Now().Add(retryTime).UnixNano() //设置超时时间
 					}
