@@ -21,7 +21,7 @@ var latency int64
 const testTime = 20000 * time.Second //测试时间
 var consumerNum = 1                  //消费者数
 var partitionNum = 6                 //生产者数
-var reCreateTopic = true             //是否需要重建topic true  false
+var reCreateTopic = false            //是否需要重建topic true  false
 func main() {
 	fmt.Println("consumer start")
 

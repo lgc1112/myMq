@@ -176,6 +176,7 @@ func (c *controller2BrokerConn) readLoop() {
 					myLogger.Logger.PrintError("CreadtPartition error:", err, controller2BrokerData)
 				}
 			}
+			myLogger.Logger.PrintfDebug2("新broker注册")
 			if openCluster {
 				for topicName, _ := range *dirtyTopics { //上传到etcd节点
 					topic, _ := c.broker.getTopic(&topicName)
